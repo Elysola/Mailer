@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/recloud/mailer/internal/mail"
+	"github.com/elysola/mailer/internal/mail"
 )
 
 // Notifier delivers a single mail notification to a destination.

@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/recloud/mailer/internal/config"
-	"github.com/recloud/mailer/internal/mail"
+	"github.com/elysola/mailer/internal/config"
+	"github.com/elysola/mailer/internal/mail"
 )
 
 const telegramMaxLen = 4096

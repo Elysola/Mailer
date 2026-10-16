@@ -366,7 +366,7 @@ password: ${IMAP_PASSWORD}
 中的工作流构建并发布镜像到 GitHub Container Registry：
 
 ```bash
-docker pull ghcr.io/ReCloudStudio/mailer:latest
+docker pull ghcr.io/elysola/mailer:latest
 ```
 
 ### 直接构建并运行

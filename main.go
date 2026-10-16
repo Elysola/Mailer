@@ -11,9 +11,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/recloud/mailer/internal/app"
-	"github.com/recloud/mailer/internal/config"
-	"github.com/recloud/mailer/internal/state"
+	"github.com/elysola/mailer/internal/app"
+	"github.com/elysola/mailer/internal/config"
+	"github.com/elysola/mailer/internal/state"
 )
 
 func main() {

@@ -401,7 +401,7 @@ image to the GitHub Container Registry via the workflow in
 `.github/workflows/docker.yml`:
 
 ```bash
-docker pull ghcr.io/ReCloudStudio/mailer:latest
+docker pull ghcr.io/elysola/mailer:latest
 ```
 
 ### Build & run directly

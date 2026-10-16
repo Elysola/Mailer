@@ -11,8 +11,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/recloud/mailer/internal/config"
-	"github.com/recloud/mailer/internal/mail"
+	"github.com/elysola/mailer/internal/config"
+	"github.com/elysola/mailer/internal/mail"
 )
 
 // discordDest is a resolved delivery target for one account.

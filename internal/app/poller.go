@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/recloud/mailer/internal/config"
-	"github.com/recloud/mailer/internal/mail"
-	"github.com/recloud/mailer/internal/notify"
-	"github.com/recloud/mailer/internal/state"
+	"github.com/elysola/mailer/internal/config"
+	"github.com/elysola/mailer/internal/mail"
+	"github.com/elysola/mailer/internal/notify"
+	"github.com/elysola/mailer/internal/state"
 )
 
 const (

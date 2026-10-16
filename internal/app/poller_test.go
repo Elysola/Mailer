@@ -17,10 +17,10 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/recloud/mailer/internal/config"
-	"github.com/recloud/mailer/internal/mail"
-	"github.com/recloud/mailer/internal/notify"
-	"github.com/recloud/mailer/internal/state"
+	"github.com/elysola/mailer/internal/config"
+	"github.com/elysola/mailer/internal/mail"
+	"github.com/elysola/mailer/internal/notify"
+	"github.com/elysola/mailer/internal/state"
 )
 
 // Self-signed cert copied from go-imap's imapclient test suite (CN=Acme Co,

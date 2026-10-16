@@ -1,4 +1,4 @@
-module github.com/recloud/mailer
+module github.com/elysola/mailer
 
 go 1.26.4
 

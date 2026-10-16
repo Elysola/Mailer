@@ -18,7 +18,7 @@ import (
 	"github.com/emersion/go-message/mail"
 	"golang.org/x/net/html"
 
-	"github.com/recloud/mailer/internal/config"
+	"github.com/elysola/mailer/internal/config"
 )
 
 const maxBodyBytes = 256 * 1024
@@ -60,7 +60,7 @@ func identify(client *imapclient.Client, acc config.Account) error {
 	_, err := client.ID(&imap.IDData{
 		Name:    "mailer",
 		Version: "1.0",
-		Vendor:  "recloud",
+		Vendor:  "elysola",
 	}).Wait()
 	return err
 }

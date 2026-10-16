@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elysola/mailer/internal/config"
 	"github.com/emersion/go-imap/v2/imapclient"
-	"github.com/recloud/mailer/internal/config"
 )
 
 // Pool keeps two connections per account:
