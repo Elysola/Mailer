@@ -298,6 +298,26 @@ max_pending_per_account: 200   # due queue items retried per account per poll cy
 This closes the old failure mode where a Telegram API outage during a poll
 would advance the UID cursor and lose the notification forever.
 
+## Rate limits
+
+Both platforms throttle, and they answer a too-eager retry by *extending* the
+ban — Telegram raises the `retry_after` value, Discord can escalate to a
+**global** limit that silences every channel the bot can post to. So a `429` is
+treated differently from an ordinary send failure:
+
+- The platform's own wait is honoured. Telegram's `parameters.retry_after` and
+  Discord's `Retry-After` header are both parsed (fractional seconds included);
+  when neither is present a conservative 1 s floor is used rather than no delay
+  at all. Absurd values are capped at 1 hour — the pending queue drops items
+  after 7 days anyway, so a longer wait belongs to the normal backoff path.
+- **Short waits (≤ 5 s) are absorbed inline**, because parking the mail in the
+  queue would deliver it 30 s later for no reason.
+- **Longer waits defer to the pending queue.** The notifier is marked failed, the
+  window is remembered, and subsequent sends to that notifier are skipped until
+  it expires — so a throttled channel never gets hammered by the rest of the
+  mailbox.
+- Throttled sends are counted in `mailer_notify_rate_limited_total`.
+
 ## Preview text
 
 The body preview is cleaned up before it is sent, so templated "verification
@@ -469,6 +489,7 @@ Useful metrics:
 | `mailer_last_poll_duration_seconds{account}` | Duration of the most recent poll (gauge with last-value semantics). |
 | `mailer_pending_notifications{account}` | Notifications queued for redelivery right now. |
 | `mailer_notify_dropped_total{account}` | Notifications abandoned after 7 days. |
+| `mailer_notify_rate_limited_total{account,notifier}` | Sends rejected by a platform rate limit (429). |
 | `mailer_messages_fetched_total` / `mailer_messages_delivered_total` | Mail read from IMAP / delivered to a notifier. |
 
 ## `mailer test` — connection & notification check

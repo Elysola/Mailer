@@ -115,3 +115,112 @@ func TestPollDeadlineDerivation(t *testing.T) {
 		}
 	}
 }
+
+// rateLimitedNotifier fails with a platform rate limit for the first n calls,
+// then succeeds, recording the wait it was given each time.
+type rateLimitedNotifier struct {
+	name     string
+	calls    int
+	failFor  int
+	retryFor time.Duration
+}
+
+func (r *rateLimitedNotifier) Name() string { return r.name }
+
+func (r *rateLimitedNotifier) Send(context.Context, mail.Message) error {
+	r.calls++
+	if r.calls <= r.failFor {
+		return &notify.RateLimitError{
+			Notifier:   r.name,
+			RetryAfter: r.retryFor,
+			StatusCode: 429,
+		}
+	}
+	return nil
+}
+
+// TestDispatchAbsorbsShortRateLimit checks that a brief platform-imposed wait
+// is waited out inline and the message still delivers, rather than being
+// parked in the retry queue for the platform's own retry window.
+func TestDispatchAbsorbsShortRateLimit(t *testing.T) {
+	p := &Poller{cfg: testCfgWithFastRetries(0), metrics: NewMetrics()}
+	n := &rateLimitedNotifier{name: "telegram", failFor: 1, retryFor: 5 * time.Millisecond}
+
+	failed := p.dispatch(context.Background(), mail.Message{Account: "a"}, []notifier{n})
+	if len(failed) != 0 {
+		t.Fatalf("failed = %v, want empty (short rate limit must be absorbed)", failed)
+	}
+	if n.calls != 2 {
+		t.Fatalf("Send called %d time(s), want 2: one throttled, one delivered", n.calls)
+	}
+
+	// The window must be recorded so the next message does not retry into it.
+	if wait := p.throttledFor("telegram"); wait > 0 {
+		t.Fatalf("throttle still active (%v) after the wait elapsed", wait)
+	}
+}
+
+// TestDispatchDefersLongRateLimit checks the opposite trade: a long window is
+// not waited out inline (that would stall the whole poll cycle) but handed to
+// the retry queue, with the throttle recorded so the next send skips it.
+func TestDispatchDefersLongRateLimit(t *testing.T) {
+	p := &Poller{cfg: testCfgWithFastRetries(3), metrics: NewMetrics()}
+	n := &rateLimitedNotifier{name: "telegram", failFor: 100, retryFor: time.Hour}
+
+	failed := p.dispatch(context.Background(), mail.Message{Account: "a"}, []notifier{n})
+	if len(failed) != 1 || failed[0] != "telegram" {
+		t.Fatalf("failed = %v, want [telegram]", failed)
+	}
+	// One attempt only: a long window must not consume the inline retry budget.
+	if n.calls != 1 {
+		t.Fatalf("Send called %d time(s), want 1 (long rate limit defers immediately)", n.calls)
+	}
+	if wait := p.throttledFor("telegram"); wait <= 0 {
+		t.Fatal("throttle was not recorded for the notifier")
+	}
+}
+
+// TestDispatchSkipsThrottledNotifier checks that a known rate limit is honoured
+// before sending, so we never hammer a channel that just asked us to stop.
+func TestDispatchSkipsThrottledNotifier(t *testing.T) {
+	p := &Poller{cfg: testCfgWithFastRetries(3), metrics: NewMetrics()}
+	p.noteThrottle("telegram", time.Minute)
+	n := &rateLimitedNotifier{name: "telegram", failFor: 0}
+
+	failed := p.dispatch(context.Background(), mail.Message{Account: "a"}, []notifier{n})
+	if len(failed) != 1 || failed[0] != "telegram" {
+		t.Fatalf("failed = %v, want [telegram]", failed)
+	}
+	if n.calls != 0 {
+		t.Fatalf("Send called %d time(s), want 0: throttled notifier must be skipped", n.calls)
+	}
+}
+
+// TestThrottleExpiry verifies the map does not leak entries forever.
+func TestThrottleExpiry(t *testing.T) {
+	p := &Poller{cfg: testCfgWithFastRetries(0), metrics: NewMetrics()}
+	p.noteThrottle("telegram", time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
+
+	if wait := p.throttledFor("telegram"); wait != 0 {
+		t.Fatalf("throttledFor = %v after expiry, want 0", wait)
+	}
+	p.mu.Lock()
+	_, present := p.throttles["telegram"]
+	p.mu.Unlock()
+	if present {
+		t.Fatal("expired throttle entry was not pruned")
+	}
+}
+
+// TestNoteThrottleKeepsLongest guards against a short window from a later
+// response shortening an already-known longer one.
+func TestNoteThrottleKeepsLongest(t *testing.T) {
+	p := &Poller{cfg: testCfgWithFastRetries(0), metrics: NewMetrics()}
+	p.noteThrottle("telegram", time.Hour)
+	p.noteThrottle("telegram", time.Millisecond)
+
+	if wait := p.throttledFor("telegram"); wait < 50*time.Minute {
+		t.Fatalf("throttledFor = %v, want the longer window to win", wait)
+	}
+}

@@ -263,6 +263,21 @@ max_pending_per_account: 200   # 每账户每轮补发处理的上限（默认�
 这堵上了旧版的漏洞：Telegram API 故障期间轮询到的邮件，UID 游标照常推进，
 通知永远丢失。
 
+## 速率限制
+
+两个平台都会限流，而且对「太急的重试」的惩罚是**延长**封禁——Telegram 会把
+`retry_after` 调大，Discord 则可能升级为**全局**限流，让 bot 在所有频道都
+发不出消息。所以 `429` 与普通发送失败分开处理：
+
+- **尊重平台给的等待时间。** Telegram 的 `parameters.retry_after` 与 Discord
+  的 `Retry-After` 响应头都会被解析（支持小数秒）；两者都没有时用保守的 1 秒
+  下限，而不是零等待。异常大的值封顶 1 小时——补发队列本来 7 天就会丢弃，
+  更长的等待交给普通退避路径。
+- **5 秒内的短等待就地吃掉**，因为丢进队列只会让它晚 30 秒送达，毫无意义。
+- **更长的等待交给补发队列。** 该通知器被标记为失败、窗口被记下，在到期前
+  后续发送会直接跳过它——被限流的渠道不会被同一批邮件反复冲。
+- 被限流的发送计入 `mailer_notify_rate_limited_total`。
+
 ## 预览文本
 
 正文预览在发送前会做清理，因此模板化的「验证码」类邮件（大段空行、占位图、
@@ -420,6 +435,7 @@ $ curl -s localhost:9100/status
 | `mailer_last_poll_duration_seconds{account}` | 最近一次轮询的耗时（last-value 语义的 gauge）。 |
 | `mailer_pending_notifications{account}` | 当前排队待补发的通知数。 |
 | `mailer_notify_dropped_total{account}` | 7 天后被放弃的通知数。 |
+| `mailer_notify_rate_limited_total{account,notifier}` | 被平台限流（429）拒绝的发送次数。 |
 | `mailer_messages_fetched_total` / `mailer_messages_delivered_total` | 从 IMAP 拉取 / 投递给通知器的邮件数。 |
 
 ## `mailer test` — 连接与通知自检

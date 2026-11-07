@@ -74,6 +74,12 @@ type Poller struct {
 	metrics       *Metrics
 	status        map[string]*AccountStatus
 	lastSeenClean time.Time
+
+	// throttles records, per notifier, the moment a platform-imposed rate
+	// limit expires. Sends to that notifier are skipped (and left to the
+	// pending queue) until then, so one throttled channel cannot make us
+	// hammer it and escalate into a longer or global ban.
+	throttles map[string]time.Time
 }
 
 func New(cfg *config.Config, store *state.Store) (*Poller, error) {
@@ -684,12 +690,29 @@ func (p *Poller) templateFor(field string, acc config.Account) string {
 	return ""
 }
 
+// maxInlineRateLimitWait is the longest platform-imposed wait dispatch will
+// absorb inline. A brief burst (Telegram usually answers with 1-5 s) is worth
+// waiting for, because the alternative is parking the mail in the retry queue
+// and delivering it 30 s later. Beyond this the queue does a better job: it
+// keeps the UID cursor moving and retries with its own backoff.
+const maxInlineRateLimitWait = 5 * time.Second
+
 // dispatch sends msg to every notifier, retrying inline per config. It
 // returns the names of notifiers that still failed after inline retries
 // (empty slice == full success).
 func (p *Poller) dispatch(ctx context.Context, msg mail.Message, notifiers []notify.Notifier) []string {
 	var failed []string
 	for _, n := range notifiers {
+		// Honour an active platform rate limit instead of burning retries
+		// against it. Marking the notifier failed hands the mail to the
+		// pending queue, which will come back once the window has passed.
+		if wait := p.throttledFor(n.Name()); wait > 0 {
+			log.Printf("[%s] %s still rate limited for %s; deferring to retry queue",
+				msg.Account, n.Name(), wait.Round(time.Second))
+			failed = append(failed, n.Name())
+			continue
+		}
+
 		ok := false
 	attempts:
 		for attempt := 0; attempt <= p.cfg.RetryAttempts; attempt++ {
@@ -705,27 +728,93 @@ func (p *Poller) dispatch(ctx context.Context, msg mail.Message, notifiers []not
 				case <-time.After(delay):
 				}
 			}
-			if err := n.Send(ctx, msg); err != nil {
-				if attempt < p.cfg.RetryAttempts {
-					log.Printf("[%s] %s notify error (retry %d/%d): %v",
-						msg.Account, n.Name(), attempt+1, p.cfg.RetryAttempts, err)
-				} else {
-					log.Printf("[%s] %s notify error (failed after %d attempts): %v",
-						msg.Account, n.Name(), p.cfg.RetryAttempts+1, err)
+			err := n.Send(ctx, msg)
+			if err == nil {
+				p.metrics.Inc("mailer_messages_delivered_total",
+					map[string]string{"account": msg.Account, "notifier": n.Name()},
+				)
+				ok = true
+				break
+			}
+
+			// A rate limit is not a delivery bug: the payload is fine and the
+			// platform will take it later. Record the window and decide whether
+			// it is short enough to absorb inline.
+			var rl *notify.RateLimitError
+			if errors.As(err, &rl) {
+				p.noteThrottle(rl.Notifier, rl.RetryAfter)
+				p.metrics.Inc("mailer_notify_rate_limited_total",
+					map[string]string{"account": msg.Account, "notifier": n.Name()},
+				)
+				log.Printf("[%s] %s rate limited, retry after %s: %v",
+					msg.Account, n.Name(), rl.RetryAfter.Round(time.Millisecond), err)
+
+				if rl.RetryAfter > maxInlineRateLimitWait || !sleepCtx(ctx, rl.RetryAfter) {
+					break attempts
 				}
+				// Waited out a short window; retry without consuming an attempt,
+				// since the previous call never reached the platform properly.
+				attempt--
 				continue
 			}
-			p.metrics.Inc("mailer_messages_delivered_total",
-				map[string]string{"account": msg.Account, "notifier": n.Name()},
-			)
-			ok = true
-			break
+
+			if attempt < p.cfg.RetryAttempts {
+				log.Printf("[%s] %s notify error (retry %d/%d): %v",
+					msg.Account, n.Name(), attempt+1, p.cfg.RetryAttempts, err)
+			} else {
+				log.Printf("[%s] %s notify error (failed after %d attempts): %v",
+					msg.Account, n.Name(), p.cfg.RetryAttempts+1, err)
+			}
+			continue
 		}
 		if !ok {
 			failed = append(failed, n.Name())
 		}
 	}
 	return failed
+}
+
+// noteThrottle records a platform rate limit for a notifier.
+func (p *Poller) noteThrottle(notifier string, wait time.Duration) {
+	until := time.Now().Add(wait)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.throttles == nil {
+		p.throttles = make(map[string]time.Time)
+	}
+	if cur, ok := p.throttles[notifier]; !ok || until.After(cur) {
+		p.throttles[notifier] = until
+	}
+}
+
+// throttledFor reports how long a notifier must still be left alone, pruning
+// the entry once it has expired so the map cannot grow without bound.
+func (p *Poller) throttledFor(notifier string) time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	until, ok := p.throttles[notifier]
+	if !ok {
+		return 0
+	}
+	remaining := time.Until(until)
+	if remaining <= 0 {
+		delete(p.throttles, notifier)
+		return 0
+	}
+	return remaining
+}
+
+// sleepCtx waits for d unless ctx is done first, reporting whether the full
+// wait elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func (p *Poller) notifierNames() []string {

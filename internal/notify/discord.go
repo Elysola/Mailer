@@ -184,6 +184,21 @@ func (d *Discord) Send(ctx context.Context, msg mail.Message) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		var apiErr struct {
+			RetryAfter float64 `json:"retry_after"`
+			Global     bool    `json:"global"`
+		}
+		_ = json.Unmarshal(respBody, &apiErr)
+		if apiErr.Global {
+			// A global limit covers every channel of this bot, not just the one
+			// we were posting to, so it is worth its own log line.
+			log.Printf("[discord] global rate limit hit, waiting before any further send")
+		}
+		return newRateLimitError(d.Name(), resp, apiErr.RetryAfter)
+	}
+
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("discord: status %d: %s", resp.StatusCode, string(respBody))

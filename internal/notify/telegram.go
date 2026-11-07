@@ -119,6 +119,19 @@ func (t *Telegram) sendOne(ctx context.Context, chatID, text string, msg mail.Me
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Telegram puts the wait in the JSON body (parameters.retry_after) and
+		// not in a Retry-After header, so the body has to be parsed here.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		var apiErr struct {
+			Parameters struct {
+				RetryAfter float64 `json:"retry_after"`
+			} `json:"parameters"`
+		}
+		_ = json.Unmarshal(respBody, &apiErr)
+		return newRateLimitError(t.Name(), resp, apiErr.Parameters.RetryAfter)
+	}
+
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("telegram chat %s: status %d: %s", chatID, resp.StatusCode, strings.TrimSpace(string(respBody)))
