@@ -28,6 +28,8 @@ func main() {
 			os.Exit(runTest(os.Args[2:]))
 		case "plugins":
 			os.Exit(runPlugins(os.Args[2:]))
+		case "auth":
+			os.Exit(runAuth(os.Args[2:]))
 		case "-h", "--help", "help":
 			usage()
 			os.Exit(0)

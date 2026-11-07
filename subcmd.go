@@ -225,6 +225,9 @@ Usage:
   mailer plugins list [-dir d] list loaded WASM plugins
   mailer plugins validate [-dir d] validate plugin manifests and binaries
   mailer plugins test [-dir d] -input mail.json run plugins against a JSON mail
+  mailer auth gmail -account a@b -client-id ID -client-secret-file F
+                          authorize a Gmail mailbox over OAuth2 and emit a token
+                          file for oauth2.token_file (--no-browser for headless)
 
 Flags:
   -config string   path to the YAML config file (default "config.yaml")
