@@ -7,10 +7,6 @@
 TINYGO ?= tinygo
 TINYGO_TARGET ?= wasip1
 
-# Every directory holding a plugin go.mod. Empty is fine: the recipes below
-# then simply do nothing.
-PLUGIN_DIRS := $(patsubst %/go.mod,%,$(wildcard plugins/*/go.mod))
-
 .PHONY: all build test plugins clean-plugins
 
 all: build
@@ -26,14 +22,12 @@ test:
 # convention in internal/plugin (a manifest at x/plugin.yaml defaults to
 # x.wasm).
 #
-# The per-plugin work lives in scripts/build-plugin.sh so the loop stays out
-# of make's recipe expansion.
+# The iteration lives in scripts/plugins.sh rather than in a recipe: a compound
+# shell statement written inline is expanded by make first, and lint tools then
+# read the mangled result as shell (producing spurious SC2046/SC1089). Keeping
+# the recipe a single simple command avoids that class of false positive.
 plugins:
-	@for dir in $(PLUGIN_DIRS); do \
-		./scripts/build-plugin.sh "$$dir" || exit 1; \
-	done
+	@./scripts/plugins.sh build
 
 clean-plugins:
-	@for dir in $(PLUGIN_DIRS); do \
-		rm -f "$$dir/$$(basename "$$dir").wasm"; \
-	done
+	@./scripts/plugins.sh clean

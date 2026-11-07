@@ -1,5 +1,8 @@
-# Makefile recipes are shell fragments, not standalone scripts. shellcheck
-# cannot parse them in isolation (target lines, `$$` escaping, and make
-# variable expansion all look like syntax errors), so only real shell scripts
-# are linted.
-exclude-dir=plugins
+# Makefile recipes are shell fragments, not standalone scripts: shellcheck
+# cannot parse target lines, `$$` escaping or make variable expansion in
+# isolation, so linting the Makefile produces false positives (notably SC2148,
+# "no shell directive", which cascades into a bogus SC1089).
+#
+# Only real shell scripts under scripts/ are linted. Those are POSIX sh, so
+# declare the dialect here rather than repeating a shebang per file.
+shell=sh
