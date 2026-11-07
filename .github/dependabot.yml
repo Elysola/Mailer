@@ -1,0 +1,57 @@
+# Keeps dependencies current without letting a surprise major bump break the
+# build. Go module updates land as one grouped PR per month: individual PRs for
+# each of the ~11 indirect modules would be pure review noise.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    # Wait before adopting a brand-new release. The direct dependencies here
+    # are all pre-1.0 or beta (go-imap v2.0.0-beta.8), so a fresh tag is more
+    # likely to carry a breaking change than a fix.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "build"
+    labels:
+      - dependencies
+
+  # Actions are pinned by major tag in the workflows, so this only ever
+  # proposes a same-major refresh — which is exactly the intent.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "build"
+    labels:
+      - dependencies

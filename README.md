@@ -791,6 +791,7 @@ internal/app                  scheduler tying fetch + notify + retry queue +
                               status together
 internal/app/metrics.go       Prometheus metric counters
 .github/workflows             CI: build & push the Docker image to GHCR;
-                              vet + race-enabled tests
+                              vet + race-enabled tests + govulncheck
+.github/dependabot.yml        monthly grouped dependency updates
 ```
 

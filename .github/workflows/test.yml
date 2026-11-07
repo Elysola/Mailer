@@ -49,6 +49,29 @@ jobs:
       - name: Go test
         run: go test -race ./...
 
+  # Separate job so a vulnerability in a dependency reports as its own red X
+  # instead of hiding inside a test failure.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # govulncheck only reports vulnerabilities reachable from this code,
+      # which keeps the signal usable: unreachable findings would just train
+      # everyone to ignore the job.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
   build-plugins:
     runs-on: ubuntu-latest
     steps:
@@ -76,8 +99,8 @@ jobs:
 
       - name: Smoke-test the otp plugin
         run: |
-          go run . plugins test --dir ./plugins \
-            --input ./plugins/sample-mail.json
+          out=$(go run . plugins test --dir ./plugins \
+            --input ./plugins/sample-mail.json)
           echo "$out"
           echo "$out" | grep -q '"code": "690831"' || {
             echo "otp plugin did not extract the expected code" >&2

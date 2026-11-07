@@ -716,5 +716,6 @@ internal/state                SQLite：UID 进度、Message-ID 去重、待补�
 internal/app                  将拉取 + 通知 + 补发队列 + 状态串联起来的调度器
 internal/app/metrics.go       Prometheus 指标计数器
 .github/workflows             CI：构建并推送 Docker 镜像到 GHCR；
-                              vet + 带 -race 的测试
+                              vet + 带 -race 的测试 + govulncheck
+.github/dependabot.yml        每月分组的依赖更新
 ```
