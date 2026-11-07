@@ -1,0 +1,5 @@
+# Makefile recipes are shell fragments, not standalone scripts. shellcheck
+# cannot parse them in isolation (target lines, `$$` escaping, and make
+# variable expansion all look like syntax errors), so only real shell scripts
+# are linted.
+exclude-dir=plugins

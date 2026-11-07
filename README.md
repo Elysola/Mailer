@@ -367,10 +367,17 @@ persisted with the retry queue, so a transient notifier failure does not
 downgrade the message to the default template.
 
 ```bash
+make plugins                                # build every plugin (needs TinyGo)
 mailer plugins list     --dir ./plugins   # list loaded plugins
 mailer plugins validate --dir ./plugins   # check manifest and entrypoint
 mailer plugins test --dir ./plugins --input ./plugins/sample-mail.json
 ```
+
+Plugin binaries are **not committed** (`plugins/*/*.wasm` is git-ignored): a
+checked-in wasm cannot be reviewed and drifts from its source. CI builds and
+validates every plugin on each push and uploads the artifacts. Host tests do
+not need TinyGo at all — `internal/plugin/testdata` ships tiny hand-assembled
+modules, so `go test ./...` works on a bare Go install.
 
 Plugin authoring (manifest schema, JSON ABI, build instructions) lives in
 [`plugins/README.md`](plugins/README.md). The bundled `otp` plugin extracts

@@ -331,10 +331,16 @@ patterns:
 重试后不会退化成默认模板。
 
 ```bash
+make plugins                                # 构建所有插件（需要 TinyGo）
 mailer plugins list     --dir ./plugins   # 列出已加载插件
 mailer plugins validate --dir ./plugins   # 校验清单与入口
 mailer plugins test --dir ./plugins --input ./plugins/sample-mail.json
 ```
+
+WASM 产物**不入库**（`plugins/*/*.wasm` 已在 `.gitignore` 中）：二进制无法
+review，且会与源码悄然脱节。CI 在每次 push 时构建并校验全部插件，产物以
+`wasm-plugins` artifact 上传。宿主测试不依赖 TinyGo——
+`internal/plugin/testdata` 内置手写的小型模块，`go test ./...` 开箱即可跑。
 
 插件开发（manifest 格式、JSON ABI、构建方式）见
 [`plugins/README.md`](plugins/README.md)。仓库自带 `otp` 示例插件，可从邮件

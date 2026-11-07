@@ -105,17 +105,36 @@ Not every toolchain produces workable modules:
 - **`encoding/json` cannot be used to parse the input.** The bundled `otp`
   plugin scans the flat JSON fields by hand instead.
 
-## Building `plugins/otp`
+## Building plugins
+
+WASM output is **not committed**. A checked-in binary cannot be reviewed and
+drifts from its source, so `*.wasm` under `plugins/` is git-ignored. Build it
+locally before running `mailer` (or `mailer plugins test`):
+
+```bash
+make plugins          # builds every plugins/*/go.mod into <dir>/<name>.wasm
+make clean-plugins    # removes the built artifacts
+```
+
+`make plugins` skips directories without a `go.mod`, fails loudly when TinyGo
+is missing, and can be pointed at a specific toolchain with
+`make plugins TINYGO=/path/to/tinygo`.
+
+CI (`.github/workflows/test.yml`) builds and validates every plugin on each
+push and uploads the wasm files as the `wasm-plugins` artifact. The host test
+suite does **not** need TinyGo: `internal/plugin/testdata` holds tiny
+hand-assembled modules so `go test ./...` works on a bare Go install.
+
+### `plugins/otp`
 
 `plugins/otp/main.go` is deliberately written without `regexp`, `fmt`,
 `encoding/json`, or `time` so it can be built with TinyGo for `wasip1` as a
-reactor module:
+reactor module. To build just this one:
 
 ```bash
-cd plugins/otp
-tinygo build -target=wasip1 -buildmode=c-shared -no-debug -o otp.wasm .
+./scripts/build-plugin.sh plugins/otp
 ```
 
 The reactor module exports `_initialize`, which the host calls before
-`alloc`/`process`. See `internal/plugin/testdata/README.md` for the tiny
-hand-assembled fixtures used by the host test suite.
+`alloc`/`process`. See `internal/plugin/testdata/README.md` for the fixtures
+used by the host test suite.

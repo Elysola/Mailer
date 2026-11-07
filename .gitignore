@@ -5,3 +5,12 @@ state.db-shm
 state.db-wal
 data/
 .aider*
+
+# Build artifacts. WASM plugins are produced by `make plugins` or CI rather than
+# committed: a checked-in binary cannot be reviewed and silently drifts from
+# its source.
+plugins/*/*.wasm
+
+# The host test suite's fixtures stay checked in on purpose: they are tiny,
+# hand-assembled modules that keep `go test` toolchain-independent.
+!internal/plugin/testdata/*.wasm

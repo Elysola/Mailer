@@ -11,6 +11,11 @@ on:
       - master
   workflow_dispatch:
 
+env:
+  # Pin the toolchain: the plugin ABI is exercised against a known TinyGo
+  # release, and a moving `latest` would turn version drift into flaky CI.
+  TINYGO_VERSION: "0.39.0"
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -39,5 +44,49 @@ jobs:
       - name: Go build
         run: go build ./...
 
+      # Host tests do not need TinyGo: internal/plugin/testdata holds tiny
+      # hand-assembled modules so the suite stays toolchain-independent.
       - name: Go test
         run: go test -race ./...
+
+  build-plugins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up TinyGo
+        uses: acifani/setup-tinygo@v2
+        with:
+          tinygo-version: ${{ env.TINYGO_VERSION }}
+
+      - name: Build plugins
+        run: make plugins
+
+      # A plugin that compiles can still fail to load: bad manifest, missing
+      # entrypoint, invalid regex, unsupported api_version.
+      - name: Validate plugin manifests and entrypoints
+        run: go run . plugins validate --dir ./plugins
+
+      - name: Smoke-test the otp plugin
+        run: |
+          go run . plugins test --dir ./plugins \
+            --input ./plugins/sample-mail.json
+          echo "$out"
+          echo "$out" | grep -q '"code": "690831"' || {
+            echo "otp plugin did not extract the expected code" >&2
+            exit 1
+          }
+
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-plugins
+          path: plugins/**/*.wasm
+          if-no-files-found: error
