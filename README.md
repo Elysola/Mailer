@@ -8,6 +8,9 @@ and pushes a notification to **Telegram** and/or **Discord** bots.
 ## Features
 
 - Polls multiple IMAP accounts concurrently on a configurable interval.
+- **Optional real-time delivery (`idle: true`)** — keep an IMAP `IDLE` session
+  open and poll an account the instant the server announces new mail, while the
+  periodic poll stays on as a safety net. See "Real-time delivery (IDLE)".
 - Implicit TLS (port 993) or STARTTLS (port 143).
 - **IMAP connection pool** with NOOP keepalive — per account the pool keeps two
   connections (a watch connection for liveness checks and a work connection
@@ -211,6 +214,41 @@ next `Watch`/`AcquireWork` redials lazily.
 Connections are kept alive with NOOP commands on a configurable
 `noop_interval` (default 30 s). A NOOP that times out (10 s) closes the
 connection, which is then redialed on demand.
+
+## Real-time delivery (IDLE)
+
+Polling alone means a worst-case delay of one `poll_interval`. Set
+`idle: true` on an account and the daemon instead keeps an `IDLE` session open
+and polls *that* account the moment the server announces new mail:
+
+```yaml
+accounts:
+  - name: primary
+    host: imap.gmail.com
+    username: me@gmail.com
+    password: "app-password"
+    tls: true
+    idle: true          # sub-second delivery instead of "within a minute"
+```
+
+The design is deliberately conservative, because a notification daemon must
+never become *less* reliable for being faster:
+
+- **IDLE is an accelerator, not the source of truth.** An IMAP `EXISTS`
+  notification carries a message count and no UIDs, so the watcher only nudges
+  the poller; the ordinary UID-based fetch still does the work. De-duplication,
+  the UID cursor and the retry queue keep exactly one code path.
+- **Polling never stops.** The periodic tick remains as the safety net. A
+  missed, dropped or never-sent event costs latency, never a notification.
+- **Sessions recycle every 20 minutes**, well inside the ~29-minute
+  server-side IDLE timeout, so a half-dead watch connection cannot hide for
+  long.
+- **Failures are non-fatal.** If IDLE cannot connect, cannot `SELECT`, or is
+  not advertised at all, the account silently falls back to polling with
+  exponential backoff. `mailer test` tells you which mode an account will use.
+
+The IDLE session uses its own dedicated connection, so it never contends with
+the connection pool.
 
 ## Notification retry
 
@@ -433,7 +471,7 @@ $ ./mailer -config config.yaml test
 IMAP primary (imap.example.com:993 tls=true mailbox=INBOX)
   ✓ select INBOX: 142 message(s), UIDNEXT 317, UIDVALIDITY 1
   ✓ capabilities: AUTH=PLAIN IDLE IMAP4rev2 LOG-IN-STARTTLS NAMESPACE
-  ✓ IDLE available (real-time mode lands in v1.2)
+  ✓ IDLE available — real-time mode enabled for this account
 IMAP work (imap.example.org:993 tls=true mailbox=INBOX)
   ✗ select INBOX: LOGIN failed: [AUTHENTICATIONFAILED] Invalid credentials
 notifier telegram: ✓ test message sent

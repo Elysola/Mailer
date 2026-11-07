@@ -292,6 +292,7 @@ func newTestPoller(t *testing.T, cfg *config.Config, store *state.Store, notifie
 		cfg:       cfg,
 		store:     store,
 		pool:      mail.NewPool(0),
+		idle:      mail.NewIdleWatcher(),
 		notifiers: ns,
 		firstRun:  map[string]bool{testAcc: true},
 		metrics:   NewMetrics(),

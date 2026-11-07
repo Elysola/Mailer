@@ -74,7 +74,7 @@ func (e *UIDValidityChanged) Error() string {
 }
 
 func dial(ctx context.Context, acc config.Account) (*imapclient.Client, error) {
-	addr := fmt.Sprintf("%s:%d", acc.Host, acc.Port)
+	addr := imapAddress(acc)
 	options := dialOptions(ctx)
 
 	var (
@@ -90,25 +90,9 @@ func dial(ctx context.Context, acc config.Account) (*imapclient.Client, error) {
 		return nil, fmt.Errorf("connect %s: %w", addr, err)
 	}
 
-	if acc.OAuth2 != nil {
-		token, err := TokenFor(ctx, &acc)
-		if err != nil {
-			client.Close()
-			return nil, err
-		}
-		// Unlike Login, Authenticate blocks until the SASL exchange completes
-		// and returns a plain error, not a command.
-		if err := client.Authenticate(NewXOAUTH2Client(acc.Username, token)); err != nil {
-			// The token was just refreshed, so a rejection means it is no
-			// good: drop the cache so the next attempt refreshes instead of
-			// replaying it. The connection is dead either way.
-			ResetTokenCache(&acc)
-			client.Close()
-			return nil, fmt.Errorf("authenticate (xoauth2): %w", err)
-		}
-	} else if err := client.Login(acc.Username, acc.Password).Wait(); err != nil {
+	if err := authenticate(ctx, client, acc); err != nil {
 		client.Close()
-		return nil, fmt.Errorf("login: %w", err)
+		return nil, err
 	}
 
 	if err := identify(client, acc); err != nil {
@@ -118,6 +102,38 @@ func dial(ctx context.Context, acc config.Account) (*imapclient.Client, error) {
 	}
 
 	return client, nil
+}
+
+// imapAddress formats the host:port pair for an account.
+func imapAddress(acc config.Account) string {
+	return fmt.Sprintf("%s:%d", acc.Host, acc.Port)
+}
+
+// authenticate logs a freshly dialled client in, using XOAUTH2 when the
+// account is configured for it and a plain LOGIN otherwise. The caller owns
+// closing the connection on error. It is shared with the IDLE watcher, which
+// dials its own connection.
+func authenticate(ctx context.Context, client *imapclient.Client, acc config.Account) error {
+	if acc.OAuth2 != nil {
+		token, err := TokenFor(ctx, &acc)
+		if err != nil {
+			return err
+		}
+		// Unlike Login, Authenticate blocks until the SASL exchange completes
+		// and returns a plain error, not a command.
+		if err := client.Authenticate(NewXOAUTH2Client(acc.Username, token)); err != nil {
+			// The token was just refreshed, so a rejection means it is no
+			// good: drop the cache so the next attempt refreshes instead of
+			// replaying it. The connection is dead either way.
+			ResetTokenCache(&acc)
+			return fmt.Errorf("authenticate (xoauth2): %w", err)
+		}
+		return nil
+	}
+	if err := client.Login(acc.Username, acc.Password).Wait(); err != nil {
+		return fmt.Errorf("login: %w", err)
+	}
+	return nil
 }
 
 // Dial opens a logged-in connection for ad-hoc use (health checks, tests).

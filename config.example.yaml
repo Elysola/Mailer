@@ -61,6 +61,10 @@ accounts:
     mailbox: INBOX
     mark_seen: false              # true = mark mail \Seen after notifying
     notify_existing: false        # false = only notify mail arriving after startup
+    # idle: true                  # real-time: hold an IMAP IDLE session open
+    #                             # and poll the instant mail arrives. Regular
+    #                             # polling continues as a safety net.
+    #                             # Requires server-side IDLE support.
     # preview_len: 120             # optional: override global preview length
     # notifiers: [telegram]        # optional: override global notifiers per account
     # message_template:            # optional: per-account message template

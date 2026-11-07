@@ -45,15 +45,20 @@ type MessageTemplate struct {
 
 // Account describes a single IMAP mailbox to poll.
 type Account struct {
-	Name            string           `yaml:"name"`
-	Host            string           `yaml:"host"`
-	Port            int              `yaml:"port"`
-	Username        string           `yaml:"username"`
-	Password        string           `yaml:"password"`
-	PasswordFile    string           `yaml:"password_file"`
-	OAuth2          *AccountOAuth2   `yaml:"oauth2"`
-	TLS             bool             `yaml:"tls"`
-	Mailbox         string           `yaml:"mailbox"`
+	Name         string         `yaml:"name"`
+	Host         string         `yaml:"host"`
+	Port         int            `yaml:"port"`
+	Username     string         `yaml:"username"`
+	Password     string         `yaml:"password"`
+	PasswordFile string         `yaml:"password_file"`
+	OAuth2       *AccountOAuth2 `yaml:"oauth2"`
+	TLS          bool           `yaml:"tls"`
+	Mailbox      string         `yaml:"mailbox"`
+	// Idle enables real-time delivery: instead of waiting for the next poll
+	// tick, the daemon keeps an IDLE connection open and polls immediately
+	// when the server announces new mail. poll_interval stays in effect as a
+	// safety net (and is the only mechanism on servers without IDLE).
+	Idle            bool             `yaml:"idle"`
 	MarkSeen        bool             `yaml:"mark_seen"`
 	NotifyExisting  bool             `yaml:"notify_existing"`
 	SendID          bool             `yaml:"send_id"`

@@ -46,6 +46,8 @@
   — 可配置 HTTP 端口。
 - **`mailer test` 子命令** — 不启动守护进程即可验证 IMAP 登录、邮箱 `SELECT`、
   服务器能力（含 IDLE 探测），并向每个启用的通知渠道试发一条消息。
+- **可选实时投递（`idle: true`）** — 用 IMAP IDLE 在邮件到达瞬间触发轮询，
+  同时保留周期轮询作为兜底。
 - 无 CGO 构建 → 生成体积小巧的多架构（amd64/arm64）Docker 镜像。
 - 收到 SIGINT/SIGTERM 时优雅退出。
 
@@ -188,6 +190,35 @@ goroutine 的 `STORE` 交错。若 work 连接恰好空闲，会被提升去应�
 
 连接通过 NOOP 在可配置的 `noop_interval`（默认 30 秒）间隔下保活。NOOP
 超时（10 秒）会关闭该连接，之后按需重连。
+
+## 实时投递（IDLE）
+
+纯轮询的代价是最坏延迟一个 `poll_interval`。给账户设置 `idle: true` 后，
+守护进程会保持一条 `IDLE` 会话，一旦服务器通告有新邮件就**立刻**轮询该账户：
+
+```yaml
+accounts:
+  - name: primary
+    host: imap.gmail.com
+    username: me@gmail.com
+    password: "app-password"
+    tls: true
+    idle: true          # 亚秒级投递，而不是「一分钟内」
+```
+
+设计上刻意保守——通知守护进程绝不能因为变快而变**不可靠**：
+
+- **IDLE 只是加速器，不是真相来源。** IMAP 的 `EXISTS` 通告只带消息数量、
+  不带 UID，所以 watcher 只是「捅一下」轮询器，真正取信仍走原有的 UID 抓取。
+  去重、UID 游标与重试队列始终只有一条代码路径。
+- **轮询永不停止。** 周期性 tick 仍作为兜底：漏掉、丢掉或压根没发的通告只损失
+  延迟，绝不会丢通知。
+- **会话每 20 分钟重建一次**，远早于服务端约 29 分钟的 IDLE 超时，半死的
+  watch 连接藏不了多久。
+- **失败不致命。** IDLE 连不上、`SELECT` 失败或服务器根本不支持时，该账户
+  静默退化为轮询（指数退避）。`mailer test` 会告诉你账户将使用哪种模式。
+
+IDLE 会话独占一条连接，不与连接池竞争。
 
 ## 通知重试
 
@@ -392,7 +423,7 @@ $ ./mailer -config config.yaml test
 IMAP primary (imap.example.com:993 tls=true mailbox=INBOX)
   ✓ select INBOX: 142 message(s), UIDNEXT 317, UIDVALIDITY 1
   ✓ capabilities: AUTH=PLAIN IDLE IMAP4rev2 LOG-IN-STARTTLS NAMESPACE
-  ✓ IDLE available (real-time mode lands in v1.2)
+  ✓ IDLE available — real-time mode enabled for this account
 IMAP work (imap.example.org:993 tls=true mailbox=INBOX)
   ✗ select INBOX: LOGIN failed: [AUTHENTICATIONFAILED] Invalid credentials
 notifier telegram: ✓ test message sent

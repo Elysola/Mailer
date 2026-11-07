@@ -65,6 +65,7 @@ type Poller struct {
 	cfg           *config.Config
 	store         *state.Store
 	pool          *mail.Pool
+	idle          *mail.IdleWatcher
 	notifiers     []notify.Notifier
 	plugins       *plugin.Engine
 	accNotifs     map[string][]string
@@ -142,6 +143,7 @@ func New(cfg *config.Config, store *state.Store) (*Poller, error) {
 		cfg:       cfg,
 		store:     store,
 		pool:      pool,
+		idle:      mail.NewIdleWatcher(),
 		notifiers: notifiers,
 		plugins:   plugins,
 		accNotifs: notifMap,
@@ -157,6 +159,7 @@ func (p *Poller) Run(ctx context.Context) {
 
 	p.pollAll(ctx)
 	p.cleanSeenIfNeeded()
+	p.startIdle(ctx)
 
 	ticker := time.NewTicker(p.cfg.PollInterval)
 	defer ticker.Stop()
@@ -166,11 +169,58 @@ func (p *Poller) Run(ctx context.Context) {
 		case <-ctx.Done():
 			log.Print("shutting down")
 			return
+		case acc, ok := <-p.idle.Events():
+			// An IDLE EXISTS event: poll just that account now. The periodic
+			// ticker stays as the safety net for anything IDLE misses.
+			if ok {
+				p.pollOne(ctx, acc)
+			}
 		case <-ticker.C:
 			p.pollAll(ctx)
 			p.cleanSeenIfNeeded()
 		}
 	}
+}
+
+// startIdle brings up the IDLE watchers for every account that asked for it.
+// Accounts without `idle: true`, and servers that do not advertise IDLE, keep
+// the plain poll schedule.
+func (p *Poller) startIdle(ctx context.Context) {
+	started := 0
+	for _, acc := range p.cfg.Accounts {
+		if !acc.Idle {
+			continue
+		}
+		p.idle.Watch(acc)
+		started++
+	}
+	if started > 0 {
+		// Stop the watchers when the daemon shuts down.
+		go func() {
+			<-ctx.Done()
+			p.idle.Stop()
+		}()
+		log.Printf("IDLE enabled for %d account(s); polling stays on as a %s safety net",
+			started, p.cfg.PollInterval)
+	}
+}
+
+// pollOne polls a single account; used by the IDLE fast path.
+func (p *Poller) pollOne(ctx context.Context, account string) {
+	acc, ok := findAccount(p.cfg.Accounts, account)
+	if !ok {
+		return
+	}
+	pollCtx, cancel := context.WithTimeout(ctx, pollDeadline(p.cfg.PollInterval))
+	defer cancel()
+	start := time.Now()
+	if err := p.pollAccount(pollCtx, acc); err != nil {
+		log.Printf("[%s] poll error: %v", acc.Name, err)
+		p.notePollFailure(acc.Name)
+		p.alertAuthFailure(ctx, acc.Name, err)
+		return
+	}
+	p.notePollSuccess(acc.Name, time.Since(start))
 }
 
 func (p *Poller) Metrics() *Metrics {
@@ -211,6 +261,9 @@ func (p *Poller) cleanSeenIfNeeded() {
 }
 
 func (p *Poller) Close() {
+	if p.idle != nil {
+		p.idle.Stop()
+	}
 	for _, n := range p.notifiers {
 		if c, ok := n.(notify.Closer); ok {
 			c.Close()

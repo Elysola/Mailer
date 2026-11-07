@@ -63,9 +63,17 @@ func runTest(args []string) int {
 		} else {
 			fmt.Printf("  ✓ capabilities: %s\n", capsString(caps))
 			if caps.Has(imap.CapIdle) || caps.Has(imap.CapIMAP4rev2) {
-				fmt.Printf("  ✓ IDLE available (real-time mode lands in v1.2)\n")
+				if acc.Idle {
+					fmt.Printf("  ✓ IDLE available — real-time mode enabled for this account\n")
+				} else {
+					fmt.Printf("  ✓ IDLE available — set `idle: true` on this account to use it\n")
+				}
 			} else {
-				fmt.Printf("  ⚠ IDLE not advertised — poll mode will be used\n")
+				if acc.Idle {
+					fmt.Printf("  ⚠ IDLE not advertised — `idle: true` ignored, poll mode will be used\n")
+				} else {
+					fmt.Printf("  ⚠ IDLE not advertised — poll mode will be used\n")
+				}
 			}
 		}
 

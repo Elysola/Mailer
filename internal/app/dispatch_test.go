@@ -15,8 +15,16 @@ import (
 type notifier = notify.Notifier
 
 // testCfgWithRetries returns a minimal config whose dispatch retries the given
-// number of times with a negligible delay.
+// number of times. The delay between attempts is long on purpose: a cancelled
+// context is then the only ready branch of the wait, which keeps the
+// cancellation tests deterministic instead of racing a timer.
 func testCfgWithRetries(attempts int) *config.Config {
+	return &config.Config{RetryAttempts: attempts, RetryDelay: 10 * time.Second}
+}
+
+// testCfgWithFastRetries is the same but with a negligible wait, for tests
+// that expect the retries to actually run.
+func testCfgWithFastRetries(attempts int) *config.Config {
 	return &config.Config{RetryAttempts: attempts, RetryDelay: time.Microsecond}
 }
 
@@ -66,7 +74,8 @@ func TestDispatchStopsRetryingOnCancelledContext(t *testing.T) {
 	}
 
 	// One attempt, then abort: a cancelled context must not spend the
-	// remaining retry budget.
+	// remaining retry budget. The bug this guards against kept retrying after
+	// cancellation and produced RetryAttempts+1 = 4 calls.
 	if n.calls != 1 {
 		t.Fatalf("Send called %d time(s), want 1 (cancelled context must abort retries)", n.calls)
 	}
@@ -75,7 +84,7 @@ func TestDispatchStopsRetryingOnCancelledContext(t *testing.T) {
 // TestDispatchRetriesWhenContextLive ensures the abort path did not disable
 // ordinary retries.
 func TestDispatchRetriesWhenContextLive(t *testing.T) {
-	cfg := testCfgWithRetries(2)
+	cfg := testCfgWithFastRetries(2)
 	p := &Poller{cfg: cfg, metrics: NewMetrics()}
 
 	n := &blockingNotifier{name: "flaky"}
