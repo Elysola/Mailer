@@ -457,15 +457,41 @@ $ curl -s localhost:9100/status
 
 常用指标：
 
-| 指标 | 含义 |
-|------|------|
-| `mailer_poll_failures_total{account}` | 以错误结束的轮询周期数。 |
-| `mailer_last_poll_success_timestamp{account}` | 最近一次成功轮询的 Unix 时间——变陈旧即可告警。 |
-| `mailer_last_poll_duration_seconds{account}` | 最近一次轮询的耗时（last-value 语义的 gauge）。 |
-| `mailer_pending_notifications{account}` | 当前排队待补发的通知数。 |
-| `mailer_notify_dropped_total{account}` | 7 天后被放弃的通知数。 |
-| `mailer_notify_rate_limited_total{account,notifier}` | 被平台限流（429）拒绝的发送次数。 |
-| `mailer_messages_fetched_total` / `mailer_messages_delivered_total` | 从 IMAP 拉取 / 投递给通知器的邮件数。 |
+| 指标 | 类型 | 含义 |
+|------|------|------|
+| `mailer_poll_failures_total{account}` | counter | 以错误结束的轮询周期数。 |
+| `mailer_last_poll_success_timestamp{account}` | gauge | 最近一次成功轮询的 Unix 时间——变陈旧即可告警。 |
+| `mailer_last_poll_duration_seconds{account}` | gauge | 最近一次轮询的耗时。 |
+| `mailer_poll_duration_seconds{account}` | histogram | 每个轮询周期的耗时分布，可算分位数。 |
+| `mailer_notify_duration_seconds{account,notifier}` | histogram | 单次 `Send` 调用耗时，平台变慢能直接看到。 |
+| `mailer_pending_notifications{account}` | gauge | 当前排队待补发的通知数。 |
+| `mailer_notify_dropped_total{account}` | counter | 7 天后被放弃的通知数。 |
+| `mailer_notify_rate_limited_total{account,notifier}` | counter | 被平台限流（429）拒绝的发送次数。 |
+| `mailer_messages_fetched_total{account}` | counter | 从 IMAP 拉取的邮件数。 |
+| `mailer_messages_delivered_total{account,notifier}` | counter | 成功投递的通知数。 |
+| `mailer_auth_failures_total{account}` | counter | IMAP 认证失败次数。 |
+| `mailer_uptime_seconds` | gauge | 进程启动至今的秒数。 |
+
+同时还免费输出运行时指标，便于把“邮件不来了”和“进程内存爆了”区分开：
+`go_goroutines`、`go_memstats_alloc_bytes`、`go_memstats_heap_inuse_bytes`、
+`go_memstats_heap_objects`、`go_memstats_sys_bytes`、
+`go_memstats_gc_cpu_fraction`、`go_gc_cycles_total`、
+`process_start_time_seconds`。
+
+告警示例（延迟过高与队列堆积）：
+
+```yaml
+- alert: MailerPollSlow
+  expr: histogram_quantile(0.95,
+          rate(mailer_poll_duration_seconds_bucket[15m])) > 10
+  for: 10m
+- alert: MailerQueueGrowing
+  expr: mailer_pending_notifications > 50
+  for: 15m
+```
+
+文本格式由本仓库手写渲染，而不是引入 `client_golang`，以保持依赖树精简；
+输出在测试中用官方 Prometheus 文本解析器验证过。
 
 ## `mailer test` — 连接与通知自检
 
@@ -714,7 +740,8 @@ internal/plugin               WASM 插件宿主（wazero 沙箱、manifest 加�
 plugins/                      示例插件与插件开发文档（otp 验证码提取）
 internal/state                SQLite：UID 进度、Message-ID 去重、待补发队列
 internal/app                  将拉取 + 通知 + 补发队列 + 状态串联起来的调度器
-internal/app/metrics.go       Prometheus 指标计数器
+internal/app/metrics.go       Prometheus 注册表：计数器、gauge、
+                              直方图、Go 运行时指标
 .github/workflows             CI：构建并推送 Docker 镜像到 GHCR；
                               vet + 带 -race 的测试 + govulncheck
 .github/dependabot.yml        每月分组的依赖更新

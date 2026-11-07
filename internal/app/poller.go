@@ -322,6 +322,10 @@ func (p *Poller) notePollSuccess(account string, dur time.Duration) {
 		st.AuthFailed = false
 	}
 	p.mu.Unlock()
+	// Both: the histogram aggregates every cycle for latency alerting, the
+	// gauges describe the state right now for a dashboard's "is it polling"
+	// panel. A gauge alone cannot express a p95.
+	p.metrics.Observe("mailer_poll_duration_seconds", map[string]string{"account": account}, dur.Seconds())
 	p.metrics.Observe("mailer_last_poll_duration_seconds", map[string]string{"account": account}, dur.Seconds())
 	p.metrics.Observe("mailer_last_poll_success_timestamp", map[string]string{"account": account}, float64(time.Now().Unix()))
 }
@@ -731,7 +735,12 @@ func (p *Poller) dispatch(ctx context.Context, msg mail.Message, notifiers []not
 				case <-time.After(delay):
 				}
 			}
+			sendStart := time.Now()
 			err := n.Send(ctx, msg)
+			p.metrics.Observe("mailer_notify_duration_seconds",
+				map[string]string{"account": msg.Account, "notifier": n.Name()},
+				time.Since(sendStart).Seconds(),
+			)
 			if err == nil {
 				p.metrics.Inc("mailer_messages_delivered_total",
 					map[string]string{"account": msg.Account, "notifier": n.Name()},

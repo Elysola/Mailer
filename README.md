@@ -511,15 +511,43 @@ started).
 
 Useful metrics:
 
-| Metric | Meaning |
-|--------|---------|
-| `mailer_poll_failures_total{account}` | Poll cycles that ended with an error. |
-| `mailer_last_poll_success_timestamp{account}` | Unix time of the last successful poll — alert when it goes stale. |
-| `mailer_last_poll_duration_seconds{account}` | Duration of the most recent poll (gauge with last-value semantics). |
-| `mailer_pending_notifications{account}` | Notifications queued for redelivery right now. |
-| `mailer_notify_dropped_total{account}` | Notifications abandoned after 7 days. |
-| `mailer_notify_rate_limited_total{account,notifier}` | Sends rejected by a platform rate limit (429). |
-| `mailer_messages_fetched_total` / `mailer_messages_delivered_total` | Mail read from IMAP / delivered to a notifier. |
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `mailer_poll_failures_total{account}` | counter | Poll cycles that ended with an error. |
+| `mailer_last_poll_success_timestamp{account}` | gauge | Unix time of the last successful poll — alert when it goes stale. |
+| `mailer_last_poll_duration_seconds{account}` | gauge | Duration of the most recent poll. |
+| `mailer_poll_duration_seconds{account}` | histogram | Every poll cycle, for latency percentiles. |
+| `mailer_notify_duration_seconds{account,notifier}` | histogram | Time per `Send` call, so a slow platform is visible. |
+| `mailer_pending_notifications{account}` | gauge | Notifications queued for redelivery right now. |
+| `mailer_notify_dropped_total{account}` | counter | Notifications abandoned after 7 days. |
+| `mailer_notify_rate_limited_total{account,notifier}` | counter | Sends rejected by a platform rate limit (429). |
+| `mailer_messages_fetched_total{account}` | counter | Mail read from IMAP. |
+| `mailer_messages_delivered_total{account,notifier}` | counter | Notifications delivered. |
+| `mailer_auth_failures_total{account}` | counter | IMAP authentication failures. |
+| `mailer_uptime_seconds` | gauge | Seconds since process start. |
+
+Runtime metrics are exposed alongside them for free, so an alert can tell
+"mail stopped arriving" apart from "the process is out of memory":
+`go_goroutines`, `go_memstats_alloc_bytes`, `go_memstats_heap_inuse_bytes`,
+`go_memstats_heap_objects`, `go_memstats_sys_bytes`,
+`go_memstats_gc_cpu_fraction`, `go_gc_cycles_total` and
+`process_start_time_seconds`.
+
+Example alert on latency and queue growth:
+
+```yaml
+- alert: MailerPollSlow
+  expr: histogram_quantile(0.95,
+          rate(mailer_poll_duration_seconds_bucket[15m])) > 10
+  for: 10m
+- alert: MailerQueueGrowing
+  expr: mailer_pending_notifications > 50
+  for: 15m
+```
+
+The exposition is hand-rendered rather than pulling in `client_golang`,
+which keeps the dependency tree small; the output is validated against the
+official Prometheus text parser in the test suite.
 
 ## `mailer test` — connection & notification check
 
@@ -789,7 +817,8 @@ internal/state                SQLite: UID progress, Message-ID dedup,
                               pending-notification queue
 internal/app                  scheduler tying fetch + notify + retry queue +
                               status together
-internal/app/metrics.go       Prometheus metric counters
+internal/app/metrics.go       Prometheus registry: counters, gauges,
+                              histograms, Go runtime stats
 .github/workflows             CI: build & push the Docker image to GHCR;
                               vet + race-enabled tests + govulncheck
 .github/dependabot.yml        monthly grouped dependency updates
