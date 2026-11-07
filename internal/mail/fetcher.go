@@ -179,9 +179,10 @@ func Fetch(ctx context.Context, client *imapclient.Client, acc config.Account, s
 
 	bodyLimit := imap.SectionPartial{Size: maxBodyBytes}
 	fetchOptions := &imap.FetchOptions{
-		Envelope:     true,
-		UID:          true,
-		InternalDate: true,
+		Envelope:      true,
+		UID:           true,
+		InternalDate:  true,
+		BodyStructure: &imap.FetchItemBodyStructure{Extended: true},
 		BodySection: []*imap.FetchItemBodySection{
 			{Peek: true, Partial: &bodyLimit},
 		},
@@ -260,7 +261,81 @@ func buildMessage(accountName string, previewLen int, buf *imapclient.FetchMessa
 		}
 	}
 
+	m.Attachments = attachmentsFromStructure(buf.BodyStructure)
+
 	return m
+}
+
+// attachmentsFromStructure lists the message's attachments from its IMAP
+// BODYSTRUCTURE, which carries type, size, name and disposition for every part
+// without downloading any of them.
+//
+// Only parts a mail client would actually show as an attachment are returned:
+// the body text/plain and text/html parts are skipped, and so are parts whose
+// only purpose is to be referenced from the HTML body (they are reported as
+// Inline, and the text template lists plain attachments only).
+func attachmentsFromStructure(bs imap.BodyStructure) []Attachment {
+	if bs == nil {
+		return nil
+	}
+	var out []Attachment
+	bs.Walk(func(path []int, part imap.BodyStructure) bool {
+		single, ok := part.(*imap.BodyStructureSinglePart)
+		if !ok {
+			return true // multipart containers: keep walking
+		}
+
+		mediaType := single.MediaType()
+		// The rendered body itself is not an attachment.
+		if mediaType == "text/plain" || mediaType == "text/html" ||
+			mediaType == "text/x-amp-html" {
+			return true
+		}
+
+		disposition := ""
+		if d := single.Disposition(); d != nil {
+			disposition = strings.ToLower(d.Value)
+		}
+
+		a := Attachment{
+			Filename:    decodeMIMEWord(single.Filename()),
+			ContentType: mediaType,
+			Size:        int64(single.Size),
+			ContentID:   strings.Trim(single.ID, "<>"),
+			Inline:      disposition == "inline",
+		}
+
+		// An inline image/part with no name is referenced from the HTML
+		// body; listing it as a separate attachment would be noise. A named
+		// inline part is a real attachment (mail clients show those).
+		if a.Inline && a.Filename == "" {
+			return true
+		}
+		// An unnamed part with no content id is also body plumbing.
+		if a.Filename == "" && a.ContentID == "" && disposition != "attachment" {
+			return true
+		}
+
+		out = append(out, a)
+		return true
+	})
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// decodeMIMEWord decodes an RFC 2047 encoded filename (e.g. =?utf-8?B?...?=),
+// which is how non-ASCII attachment names usually arrive.
+func decodeMIMEWord(s string) string {
+	if s == "" || !strings.Contains(s, "=?") {
+		return s
+	}
+	dec := &mime.WordDecoder{CharsetReader: gomessage.CharsetReader}
+	if decoded, err := dec.DecodeHeader(s); err == nil {
+		return decoded
+	}
+	return s
 }
 
 func formatAddressesList(addrs []imap.Address) []string {

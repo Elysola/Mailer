@@ -18,6 +18,18 @@ type AccountState struct {
 	UIDValidity uint32
 }
 
+// PendingAttachment is the metadata a queued notification needs to keep
+// listing the original message's attachments on a later retry. It mirrors
+// mail.Attachment; state does not import mail (nor the reverse), so the
+// conversion happens in the app layer.
+type PendingAttachment struct {
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	ContentID   string `json:"content_id,omitempty"`
+	Inline      bool   `json:"inline,omitempty"`
+}
+
 // Pending is a notification whose delivery failed (fully or for some
 // notifiers) and which awaits retry with exponential backoff.
 type Pending struct {
@@ -37,6 +49,11 @@ type Pending struct {
 	TitleOverride string
 	TextOverride  string
 	Fields        map[string]string
+
+	// Attachments preserves the attachment metadata across a retry, so a
+	// redelivered notification still lists the files the original did. JSON
+	// encoded, so adding fields later does not need a migration.
+	Attachments []PendingAttachment
 
 	Attempts int
 	NextTry  time.Time
@@ -73,6 +90,7 @@ CREATE TABLE IF NOT EXISTS pending_notifications (
     title_override TEXT  NOT NULL DEFAULT '',
     text_override  TEXT  NOT NULL DEFAULT '',
     fields         TEXT  NOT NULL DEFAULT '',
+    attachments    TEXT  NOT NULL DEFAULT '',
     attempts     INTEGER NOT NULL DEFAULT 0,
     next_try_unix INTEGER NOT NULL DEFAULT 0,
     created_unix INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -122,6 +140,7 @@ var pendingMigrations = []pendingMigration{
 	{"title_override", "ALTER TABLE pending_notifications ADD COLUMN title_override TEXT NOT NULL DEFAULT ''"},
 	{"text_override", "ALTER TABLE pending_notifications ADD COLUMN text_override TEXT NOT NULL DEFAULT ''"},
 	{"fields", "ALTER TABLE pending_notifications ADD COLUMN fields TEXT NOT NULL DEFAULT ''"},
+	{"attachments", "ALTER TABLE pending_notifications ADD COLUMN attachments TEXT NOT NULL DEFAULT ''"},
 }
 
 // migratePendingColumns applies pendingMigrations to legacy databases. It is
@@ -271,8 +290,8 @@ func (s *Store) EnqueuePending(p Pending, nextTry time.Time) error {
 	}
 	_, err = s.db.Exec(`
 INSERT INTO pending_notifications
-    (account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attempts, next_try_unix, created_unix)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attachments, attempts, next_try_unix, created_unix)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account, uid) DO UPDATE SET
     message_id = excluded.message_id,
     sender     = excluded.sender,
@@ -283,10 +302,12 @@ ON CONFLICT(account, uid) DO UPDATE SET
     title_override = excluded.title_override,
     text_override  = excluded.text_override,
     fields         = excluded.fields,
+    attachments    = excluded.attachments,
     next_try_unix = excluded.next_try_unix`,
 		p.Account, p.UID, p.MessageID, p.From, p.Subject,
 		p.Date.Unix(), p.Preview, strings.Join(failed, ","),
 		p.TitleOverride, p.TextOverride, encodeFields(p.Fields),
+		encodeAttachments(p.Attachments),
 		attempts, nextTry.Unix(), created.Unix(),
 	)
 	if err != nil {
@@ -325,7 +346,7 @@ FROM pending_notifications WHERE account = ? AND uid = ?`,
 // the loop), so a poll cycle cannot stall behind an unreachable notifier.
 func (s *Store) DuePending(account string, now time.Time, limit int) ([]Pending, error) {
 	rows, err := s.db.Query(`
-SELECT account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attempts, next_try_unix, created_unix
+SELECT account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attachments, attempts, next_try_unix, created_unix
 FROM pending_notifications
 WHERE account = ? AND next_try_unix <= ?
 ORDER BY uid LIMIT ?`,
@@ -340,10 +361,10 @@ ORDER BY uid LIMIT ?`,
 	for rows.Next() {
 		var p Pending
 		var dateUnix, nextTry, created int64
-		var failed, fieldsJSON string
+		var failed, fieldsJSON, attachmentsJSON string
 		if err := rows.Scan(&p.Account, &p.UID, &p.MessageID, &p.From, &p.Subject,
 			&dateUnix, &p.Preview, &failed, &p.TitleOverride, &p.TextOverride, &fieldsJSON,
-			&p.Attempts, &nextTry, &created); err != nil {
+			&attachmentsJSON, &p.Attempts, &nextTry, &created); err != nil {
 			return nil, fmt.Errorf("scan pending: %w", err)
 		}
 		p.Date = time.Unix(dateUnix, 0)
@@ -351,6 +372,7 @@ ORDER BY uid LIMIT ?`,
 		p.Created = time.Unix(created, 0)
 		p.Failed = splitCSV(failed)
 		p.Fields = decodeFields(fieldsJSON)
+		p.Attachments = decodeAttachments(attachmentsJSON)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -413,6 +435,32 @@ func decodeFields(s string) map[string]string {
 		return nil
 	}
 	return fields
+}
+
+// encodeAttachments serialises attachment metadata for the pending queue. A
+// marshal failure is not worth failing the enqueue over: losing the attachment
+// list is strictly better than losing the notification.
+func encodeAttachments(atts []PendingAttachment) string {
+	if len(atts) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(atts)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// decodeAttachments reverses encodeAttachments, tolerating corrupt data.
+func decodeAttachments(s string) []PendingAttachment {
+	if s == "" {
+		return nil
+	}
+	var atts []PendingAttachment
+	if err := json.Unmarshal([]byte(s), &atts); err != nil {
+		return nil
+	}
+	return atts
 }
 
 func splitCSV(s string) []string {

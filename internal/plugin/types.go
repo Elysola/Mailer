@@ -26,6 +26,29 @@ type Mail struct {
 	HTML      string            `json:"html,omitempty"`
 	Preview   string            `json:"preview,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
+
+	// Attachments carries metadata only — never the bytes.
+	//
+	// A plugin that needs to react to a file ("flag invoices", "skip a giant
+	// attachment") would otherwise have to guess from the body text, and
+	// fetching payloads over a polling loop would cost more than the
+	// notification is worth. Keeping the ABI metadata-only means plugins stay
+	// cheap and the sandbox never gains a reason to grow.
+	//
+	// Added in API v1 without a version bump: it is an additive optional field,
+	// so existing plugins that ignore it keep working, and plugins built
+	// against the new field run on an old host as an unknown-but-ignored key.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment is the metadata of one attached part.
+type Attachment struct {
+	// Filename is the decoded file name, empty when the sender omitted one.
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	ContentID   string `json:"content_id,omitempty"`
+	Inline      bool   `json:"inline,omitempty"`
 }
 
 type Result struct {

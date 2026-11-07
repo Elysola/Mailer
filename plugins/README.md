@@ -28,6 +28,11 @@ The WASM module must export:
 The input and output are UTF-8 JSON. The input follows `internal/plugin.Mail`;
 the output follows `internal/plugin.Result`.
 
+`Mail` also carries `attachments`, a metadata-only list (`filename`,
+`content_type`, `size`, `content_id`, `inline`). The bytes are never included —
+the daemon only parses IMAP BODYSTRUCTURE, so a plugin can react to *what* was
+attached without the host ever downloading it.
+
 The repository includes `sample-mail.json` as an input fixture. A compiled
 plugin can be inspected and tested with:
 

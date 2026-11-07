@@ -368,7 +368,36 @@ The global template applies to every account; an account-level
 `message_template` overrides it for that account alone.
 
 Available fields: `{{.From}}`, `{{.Subject}}`, `{{.Date}}`, `{{.Preview}}`,
-`{{.MessageID}}`, `{{.Text}}` (full body), `{{.Account}}` (config account name).
+`{{.MessageID}}`, `{{.Text}}` (full body), `{{.Account}}` (config account name),
+`{{.Attachments}}` (see below).
+
+### Attachments
+
+Attachment **metadata** is parsed from the message's IMAP BODYSTRUCTURE, so
+nothing is downloaded — the daemon still fetches only the body text:
+
+```yaml
+message_template:
+  text: |
+    **From:** {{.From}}
+    **Subject:** {{.Subject}}
+    {{with .Attachments}}**Files:** {{len .}}{{end}}
+    {{range .Attachments}}- {{.Filename}} ({{.ContentType}}, {{.Size}} B){{end}}
+```
+
+Each entry carries `Filename` (decoded from RFC 2047, e.g. `=?utf-8?B?...?=`),
+`ContentType`, `Size` in bytes, `ContentID` and `Inline`. Body parts
+(`text/plain`, `text/html`) are never reported; an unnamed inline part
+referenced from the HTML body (a logo, a signature graphic) is skipped, while
+a **named** inline part is kept, matching what mail clients display.
+
+Because templates render `Size` as a raw byte count, `{{.AttachmentSummary}}`
+is also available: it returns a ready-made `name (size)` list with human sizes
+(`invoice.pdf (2.0 KB)`) and truncated names, or `""` when there are none. The
+default template already includes it as an `Attachments:` line when non-empty.
+
+Metadata also reaches plugins (`attachments` in the JSON payload) and survives
+a failed delivery — a retried notification lists the same files.
 
 ## WASM parsing plugins
 

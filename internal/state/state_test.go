@@ -314,3 +314,69 @@ VALUES ('a', 1, '<old@x>', 'legacy preview', 'telegram');
 	}
 	t.Cleanup(func() { s2.Close() })
 }
+
+// TestPendingAttachmentsRoundTrip guards the JSON column: a notification that
+// queued with attachments must still list them when it is retried later.
+func TestPendingAttachmentsRoundTrip(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	p := Pending{
+		Account: "a", UID: 1, MessageID: "<x@y>", Failed: []string{"telegram"},
+		Attachments: []PendingAttachment{
+			{Filename: "invoice.pdf", ContentType: "application/pdf", Size: 2048},
+			{Filename: "photo.jpg", Size: 5 << 20, Inline: true, ContentID: "img1"},
+		},
+	}
+	if err := s.EnqueuePending(p, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("EnqueuePending: %v", err)
+	}
+
+	due, err := s.DuePending("a", now, 10)
+	if err != nil {
+		t.Fatalf("DuePending: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("got %d due, want 1", len(due))
+	}
+	got := due[0].Attachments
+	if len(got) != 2 {
+		t.Fatalf("attachments = %v, want 2", got)
+	}
+	if got[0] != p.Attachments[0] {
+		t.Errorf("attachment[0] = %+v, want %+v", got[0], p.Attachments[0])
+	}
+	if got[1] != p.Attachments[1] {
+		t.Errorf("attachment[1] = %+v, want %+v", got[1], p.Attachments[1])
+	}
+}
+
+// TestPendingWithoutAttachmentsStaysEmpty ensures the new column does not turn
+// every queued notification into a non-nil empty slice.
+func TestPendingWithoutAttachmentsStaysEmpty(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	if err := s.EnqueuePending(Pending{Account: "a", UID: 2, Failed: []string{"t"}}, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("EnqueuePending: %v", err)
+	}
+	due, err := s.DuePending("a", now, 10)
+	if err != nil {
+		t.Fatalf("DuePending: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("got %d due, want 1", len(due))
+	}
+	if due[0].Attachments != nil {
+		t.Errorf("Attachments = %v, want nil", due[0].Attachments)
+	}
+}
+
+// TestDecodeAttachmentsToleratesCorruptJSON keeps a corrupt cache from
+// blocking delivery: the mail must still go out, just without the file list.
+func TestDecodeAttachmentsToleratesCorruptJSON(t *testing.T) {
+	if got := decodeAttachments("{not json"); got != nil {
+		t.Errorf("decodeAttachments(corrupt) = %v, want nil", got)
+	}
+	if got := decodeAttachments(""); got != nil {
+		t.Errorf("decodeAttachments(empty) = %v, want nil", got)
+	}
+}

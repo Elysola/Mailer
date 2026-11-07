@@ -493,6 +493,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc config.Account) error {
 			TitleOverride: msg.TitleOverride,
 			TextOverride:  msg.TextOverride,
 			Fields:        msg.Fields,
+			Attachments:   toPendingAttachments(msg.Attachments),
 			Failed:        failed,
 		}, time.Now().Add(pendingInitialDelay)); err != nil {
 			log.Printf("[%s] enqueue pending: %v", acc.Name, err)
@@ -562,6 +563,7 @@ func (p *Poller) retryPending(ctx context.Context, acc config.Account) {
 			TitleOverride: item.TitleOverride,
 			TextOverride:  item.TextOverride,
 			Fields:        item.Fields,
+			Attachments:   fromPendingAttachments(item.Attachments),
 			TitleTmpl:     titleTmpl,
 			TextTmpl:      textTmpl,
 		}
@@ -656,6 +658,7 @@ func (p *Poller) applyPlugin(ctx context.Context, msg *mail.Message) ([]string, 
 		From: msg.From, To: msg.To, Cc: msg.Cc, Subject: msg.Subject,
 		Date: msg.Date, Text: msg.BodyText, HTML: msg.HTML,
 		Preview: msg.Preview, Headers: msg.Headers,
+		Attachments: toPluginAttachments(msg.Attachments),
 	})
 	if err != nil {
 		log.Printf("[%s] plugin processing: %v", msg.Account, err)
@@ -823,4 +826,62 @@ func (p *Poller) notifierNames() []string {
 		names = append(names, n.Name())
 	}
 	return names
+}
+
+// toPendingAttachments converts mail attachment metadata for storage in the
+// retry queue. state deliberately does not import mail, so the mapping lives
+// here rather than on either type.
+func toPendingAttachments(atts []mail.Attachment) []state.PendingAttachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]state.PendingAttachment, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, state.PendingAttachment{
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			Size:        a.Size,
+			ContentID:   a.ContentID,
+			Inline:      a.Inline,
+		})
+	}
+	return out
+}
+
+// fromPendingAttachments reverses toPendingAttachments.
+func fromPendingAttachments(atts []state.PendingAttachment) []mail.Attachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]mail.Attachment, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, mail.Attachment{
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			Size:        a.Size,
+			ContentID:   a.ContentID,
+			Inline:      a.Inline,
+		})
+	}
+	return out
+}
+
+// toPluginAttachments converts attachment metadata for the plugin ABI, which is
+// a separate type so the sandbox contract can evolve without dragging mail's
+// internals into it.
+func toPluginAttachments(atts []mail.Attachment) []plugin.Attachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]plugin.Attachment, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, plugin.Attachment{
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			Size:        a.Size,
+			ContentID:   a.ContentID,
+			Inline:      a.Inline,
+		})
+	}
+	return out
 }

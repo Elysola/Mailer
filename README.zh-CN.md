@@ -323,7 +323,36 @@ message_template:
 全局模板适用于所有账户；账户级的 `message_template` 可覆盖全局设置。
 
 可用字段：`{{.From}}`、`{{.Subject}}`、`{{.Date}}`、`{{.Preview}}`、
-`{{.MessageID}}`、`{{.Text}}`（完整正文）、`{{.Account}}`（配置中的账户名称）。
+`{{.MessageID}}`、`{{.Text}}`（完整正文）、`{{.Account}}`（配置中的账户名称）、
+`{{.Attachments}}`（见下文）。
+
+### 附件
+
+附件的**元数据**来自邮件的 IMAP BODYSTRUCTURE，因此不会下载任何附件内容——
+守护进程依然只取正文：
+
+```yaml
+message_template:
+  text: |
+    **发件人：** {{.From}}
+    **主题：** {{.Subject}}
+    {{with .Attachments}}**附件：** {{len .}} 个{{end}}
+    {{range .Attachments}}- {{.Filename}}（{{.ContentType}}，{{.Size}} 字节）{{end}}
+```
+
+每一项包含 `Filename`（已从 RFC 2047 解码，例如 `=?utf-8?B?...?=`）、
+`ContentType`、`Size`（字节）、`ContentID` 和 `Inline`。正文部分
+（`text/plain`、`text/html`）永远不会被当成附件；被 HTML 正文引用的
+**无名**内嵌部分（logo、签名图）也会跳过，而有名字的内嵌部分会保留，
+与邮件客户端的展示保持一致。
+
+模板里 `Size` 是裸字节数，因此还提供了 `{{.AttachmentSummary}}`：它返回
+现成的 `名称（大小）` 列表并已做人类可读换算（`invoice.pdf (2.0 KB)`），
+名称过长会截断，没有附件时返回 `""`。默认模板在非空时会输出
+`Attachments:` 一行。
+
+附件元数据同时会传给插件（JSON 中的 `attachments`），并且在投递失败后
+会随队列一起保留——重试发出的通知依然列出同样的文件。
 
 ## WASM 解析插件
 

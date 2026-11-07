@@ -251,6 +251,17 @@ func (f *fakeNotifier) lastUID() uint32 {
 	return f.sent[len(f.sent)-1].UID
 }
 
+// lastMessage returns the message from the most recent successful send, so a
+// test can assert on what a notifier would actually have rendered.
+func (f *fakeNotifier) lastMessage() mail.Message {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sent) == 0 {
+		return mail.Message{}
+	}
+	return f.sent[len(f.sent)-1]
+}
+
 func (f *fakeNotifier) uidList() []uint32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
