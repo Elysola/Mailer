@@ -80,7 +80,15 @@ accounts:
     host: imap.gmail.com
     port: 993
     username: me@gmail.com
-    password: "app-password"      # Gmail requires an App Password
+    # Gmail disabled password/basic auth, so either an App Password (with
+    # 2FA enabled) or OAuth2 works. App Password keeps `password`; OAuth2
+    # replaces it with the block below. See "Gmail over OAuth2" in README.
+    password: "app-password"     # App Password: 16 chars, 2FA required
+    # oauth2:                     # ...or comment out `password` and use this
+    #   client_id: "1234-abc.apps.googleusercontent.com"
+    #   client_secret_file: /run/secrets/gmail_client_secret
+    #   # written by `mailer auth gmail`; must be mode 0600
+    #   token_file: /var/lib/mailer/gmail_token.json
     tls: true
     mailbox: INBOX
 

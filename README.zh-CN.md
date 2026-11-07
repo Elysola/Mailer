@@ -434,6 +434,98 @@ password: ${IMAP_PASSWORD}
 `bot_token` / `bot_token_file`（Telegram 和 Discord）以及 `webhook_url` /
 `webhook_url_file`（Discord）同样适用。
 
+## Gmail 使用 OAuth2（XOAUTH2）
+
+Google 已停止“不够安全的应用”密码登录，Gmail 账号现在要么用应用专用密码（需开
+启两步验证），要么用 OAuth2。OAuth2 更安全：凭证是可撤销、限定了权限范围的
+token，而不是密码；当组织明令禁止应用专用密码时，它是唯一可行的方式。
+
+IMAP 本身并没有被废弃——Gmail 仍然提供 IMAP，只是要求用 XOAUTH2 认证。轮询代码
+不需要任何改动。
+
+### 1. 创建 OAuth 客户端
+
+在 [Google Cloud Console](https://console.cloud.google.com/apis/credentials)：
+
+1. 创建（或选择）项目，启用 **Gmail API**。
+2. 配置 OAuth 同意屏幕。个人使用选 **外部（External）** 即可；
+   **内部（Internal）** 仅 Workspace 可用。
+3. 创建凭证 → **OAuth 客户端 ID** → 应用类型选 **桌面应用**。
+4. 记下 client ID 与 client secret。
+
+### 2. 授权邮箱
+
+在**有浏览器的机器**上运行——通常是你自己的笔记本，而不是服务器：
+
+```bash
+./mailer auth gmail \
+  --account me@gmail.com \
+  --client-id 1234-abc.apps.googleusercontent.com \
+  --client-secret-file ~/.config/mailer/gmail_client_secret \
+  --output gmail_token.json
+```
+
+它会打开浏览器，并在 `127.0.0.1` 上接收回调。同意授权后，写出
+`gmail_token.json`（权限 `0600`），其中包含 refresh token。
+
+**无图形界面的机器**请加 `--no-browser`：它会打印授权链接，并等待你同意后把完整
+的回调 URL 粘贴回来。那个页面本身会打不开——这是正常的，因为本机没有监听；
+直接复制地址栏内容即可：
+
+```bash
+./mailer auth gmail --account me@gmail.com \
+  --client-id ... --client-secret-file ... --no-browser --output gmail_token.json
+```
+
+也可以在笔记本上授权，然后把得到的 token 文件复制到服务器。refresh token 绑定的是
+OAuth 客户端和 Google 账号，而不是某台机器或某个 IP，因此搬运完全合法，还能免去在
+服务器上跑浏览器。
+
+### 3. 配置账号
+
+把 `password` 换成 `oauth2` 块：
+
+```yaml
+accounts:
+  - name: gmail
+    host: imap.gmail.com
+    port: 993
+    username: me@gmail.com
+    tls: true
+    oauth2:
+      client_id: 1234-abc.apps.googleusercontent.com
+      client_secret_file: /run/secrets/gmail_client_secret
+      token_file: /var/lib/mailer/gmail_token.json
+```
+
+`client_secret`（直接写）与 `client_secret_file`（读文件）都支持；用文件形式可以让
+secret 不出现在 `config.yaml` 里。`token_file` 必须对守护进程可读，且不能对
+组或其他用户可读——权限比 `0600` 宽松时守护进程会拒绝使用该 token 文件。
+
+可选键：`scope`（默认 `https://mail.google.com/`）与 `token_url`
+（默认 Google 端点，可指向测试桩或代理）。
+
+### 刷新与过期
+
+access token 会自动刷新并缓存在内存中；refresh token 绝不会被写回
+`config.yaml`。如果 refresh token 失效，守护进程会向该账号的通知渠道发送**一条**
+告警，并在 `/status` 中置 `auth_failed`，之后安静地持续重试。重新运行
+`mailer auth gmail` 并替换 token 文件即可恢复。
+
+部署前需要知道两个限制：
+
+- **「测试」状态的同意屏幕会让 refresh token 7 天后过期。** 只要 OAuth 同意屏幕
+  处于 *Testing* 状态，Google 就把外部用户的 refresh token 限制为 7 天；到期后每次
+  刷新都会返回 `invalid_grant`。对长期运行的守护进程，应发布应用（或使用
+  Internal / Workspace 应用），否则就得每周手动续期。
+- **`https://mail.google.com/` 属于受限范围（restricted scope）。** 通过 IMAP 读信
+  必须使用它。在 Testing 状态下给自己（测试用户）用没问题，但若要公开发布本应用，
+  需要经过 Google 的受限范围验证与第三方安全评估。只服务自己的邮箱时，保持应用未
+  验证、把自己加为测试用户即可。
+
+同理，单一私人账号仍可用应用专用密码作为退路：它需要两步验证，但不需要 Cloud
+项目，也不会每 7 天过期一次。
+
 ## 运行
 
 ```bash

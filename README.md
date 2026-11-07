@@ -476,6 +476,107 @@ password: ${IMAP_PASSWORD}
 The same applies to `bot_token` / `bot_token_file` (Telegram & Discord) and
 `webhook_url` / `webhook_url_file` (Discord).
 
+## Gmail over OAuth2 (XOAUTH2)
+
+Google switched off "less secure app" password login, so a Gmail account needs
+either an App Password (2FA required) or OAuth2. OAuth2 is the stronger option:
+the credential is a revocable, scope-limited token instead of a password, and it
+keeps working when an organisation blocks App Passwords outright.
+
+IMAP itself is not going away — Gmail still serves IMAP, it just requires
+XOAUTH2 to authenticate. Nothing about the polling code changes.
+
+### 1. Create the OAuth client
+
+In [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+
+1. Create (or pick) a project and enable the **Gmail API**.
+2. Configure the OAuth consent screen. **User type: External** is fine for
+   personal use; **Internal** is only available on Workspace.
+3. Create credentials → **OAuth client ID** → application type **Desktop app**.
+4. Note the client ID and client secret.
+
+### 2. Authorize the mailbox
+
+Run this **where a browser exists** — normally your laptop, not the server:
+
+```bash
+./mailer auth gmail \
+  --account me@gmail.com \
+  --client-id 1234-abc.apps.googleusercontent.com \
+  --client-secret-file ~/.config/mailer/gmail_client_secret \
+  --output gmail_token.json
+```
+
+This opens a browser and captures the callback on `127.0.0.1`. Approve the
+consent screen and it writes `gmail_token.json` (mode `0600`) containing a
+refresh token.
+
+**On a headless machine**, add `--no-browser`. It prints the consent URL and
+waits for you to paste back the full redirect URL after approving. The page
+itself will fail to load — that is expected, since nothing is listening; copy
+the address bar instead:
+
+```bash
+./mailer auth gmail --account me@gmail.com \
+  --client-id ... --client-secret-file ... --no-browser --output gmail_token.json
+```
+
+You can also authorize on a laptop and copy the resulting token file to the
+server. A refresh token is bound to the OAuth client and the Google account, not
+to a machine or IP address, so moving it is legitimate and avoids running a
+browser on the server.
+
+### 3. Configure the account
+
+Replace `password` with an `oauth2` block:
+
+```yaml
+accounts:
+  - name: gmail
+    host: imap.gmail.com
+    port: 993
+    username: me@gmail.com
+    tls: true
+    oauth2:
+      client_id: 1234-abc.apps.googleusercontent.com
+      client_secret_file: /run/secrets/gmail_client_secret
+      token_file: /var/lib/mailer/gmail_token.json
+```
+
+`client_secret` (inline) and `client_secret_file` are both accepted; the file
+form keeps the secret out of `config.yaml`. `token_file` must be readable by the
+daemon and must not be group- or world-readable — the daemon refuses to use a
+token file with looser permissions than `0600`.
+
+Optional keys: `scope` (default `https://mail.google.com/`) and `token_url`
+(default Google's endpoint; override for a test double or a proxy).
+
+### Refreshing and expiry
+
+The access token is refreshed automatically and cached in memory; the refresh
+token is never written back to `config.yaml`. If the refresh token stops working,
+the daemon sends **one** alert to the account's notifiers and sets
+`auth_failed` in `/status`, then keeps retrying quietly. Re-run
+`mailer auth gmail` and redeploy the token file to recover.
+
+Two constraints worth knowing before you deploy:
+
+- **Testing-mode consent screens expire refresh tokens after 7 days.** While the
+  OAuth consent screen is in *Testing* status, Google limits refresh tokens for
+  external users to 7 days; after that every refresh fails with `invalid_grant`.
+  For a long-running daemon, publish the app (or use an Internal/Workspace app)
+  so the token does not need weekly manual renewal.
+- **`https://mail.google.com/` is a restricted scope.** It is required to read
+  mail over IMAP. Using it in Testing mode with test users is fine, but
+  distributing the app publicly requires Google's restricted-scope verification
+  and a third-party security assessment. For your own mailbox, keep the app
+  unverified and add yourself as a test user.
+
+For the same reason, App Passwords remain a valid fallback for a single personal
+account: they need 2FA, but no Cloud project, and they do not expire on a
+7-day cycle.
+
 ## Run
 
 ```bash
