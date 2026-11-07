@@ -90,7 +90,23 @@ func dial(ctx context.Context, acc config.Account) (*imapclient.Client, error) {
 		return nil, fmt.Errorf("connect %s: %w", addr, err)
 	}
 
-	if err := client.Login(acc.Username, acc.Password).Wait(); err != nil {
+	if acc.OAuth2 != nil {
+		token, err := TokenFor(ctx, &acc)
+		if err != nil {
+			client.Close()
+			return nil, err
+		}
+		// Unlike Login, Authenticate blocks until the SASL exchange completes
+		// and returns a plain error, not a command.
+		if err := client.Authenticate(NewXOAUTH2Client(acc.Username, token)); err != nil {
+			// The token was just refreshed, so a rejection means it is no
+			// good: drop the cache so the next attempt refreshes instead of
+			// replaying it. The connection is dead either way.
+			ResetTokenCache(&acc)
+			client.Close()
+			return nil, fmt.Errorf("authenticate (xoauth2): %w", err)
+		}
+	} else if err := client.Login(acc.Username, acc.Password).Wait(); err != nil {
 		client.Close()
 		return nil, fmt.Errorf("login: %w", err)
 	}
