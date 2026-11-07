@@ -1,0 +1,23 @@
+name: otp
+version: 1.0.0
+api_version: mailer.plugin.v1
+entrypoint: otp.wasm
+priority: 100
+
+limits:
+  timeout: 100ms
+  max_input: 524288
+  max_output: 16384
+
+# Host-evaluated extraction rules (RE2). These run in Go before the WASM
+# module and fill result.fields, so templates can use {{.Fields.code}} even
+# when the plugin itself does no parsing.
+#
+# The module still extracts the code itself (it must, to build its own
+# default text), but these patterns make the capture declarative and give
+# precedence to nothing: a field the module already produced wins.
+patterns:
+  - name: code
+    regexp: '(?:\b|\D)(\d{6})(?:\D|$)'
+    source: text
+    group: 1

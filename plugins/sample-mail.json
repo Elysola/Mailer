@@ -1,0 +1,14 @@
+{
+  "account": "primary",
+  "uid": 42,
+  "message_id": "<sample@example.com>",
+  "from": "security@example.com",
+  "subject": "Your verification code",
+  "date": "2026-01-01T12:00:00Z",
+  "text": "Your verification code is 690831. It expires in 10 minutes.",
+  "html": "<p>Your verification code is <b>690831</b>.</p>",
+  "preview": "Your verification code is 690831.",
+  "headers": {
+    "List-Id": "security.example.com"
+  }
+}
