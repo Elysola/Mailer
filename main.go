@@ -30,12 +30,17 @@ func main() {
 			os.Exit(runPlugins(os.Args[2:]))
 		case "auth":
 			os.Exit(runAuth(os.Args[2:]))
+		case "version", "-version", "--version", "-v":
+			fmt.Println(VersionString())
+			os.Exit(0)
 		case "-h", "--help", "help":
 			usage()
 			os.Exit(0)
 		}
 		// Anything else falls through to the daemon (and its own flag parse).
 	}
+
+	log.Printf("%s", VersionString())
 
 	configPath := flag.String("config", "config.yaml", "path to the YAML config file")
 	flag.Parse()

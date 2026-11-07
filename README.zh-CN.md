@@ -81,8 +81,21 @@ accounts:
 ## 构建
 
 ```bash
+make build          # 无 CGO，并从 git 注入版本元信息
+# 或者不使用 make：
 go build -o mailer .
 ```
+
+`mailer version` 会显示二进制是由什么构建出来的。正式发布由 GoReleaser 注入
+真实 tag；本地构建报告 `dev` 加上 Go 在 build info 里记录的 commit。
+
+```console
+$ ./mailer version
+mailer v1.2.0 (9d1408b44ff5 linux/amd64, go1.26.10, 2026-11-07T13:48:28Z)
+```
+
+打 tag 的发布会提供 linux/darwin（amd64/arm64）静态二进制与校验和文件，以及在
+`ghcr.io/elysola/mailer` 下的多架构容器镜像。
 
 ## 配置
 

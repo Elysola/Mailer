@@ -6,6 +6,9 @@ state.db-wal
 data/
 .aider*
 
+# GoReleaser work directory (release-check / local snapshot builds).
+dist/
+
 # Build artifacts. WASM plugins are produced by `make plugins` or CI rather than
 # committed: a checked-in binary cannot be reviewed and silently drifts from
 # its source.

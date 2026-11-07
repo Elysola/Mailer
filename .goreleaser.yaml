@@ -1,0 +1,70 @@
+# goreleaser builds the release binaries and the GitHub Release body.
+#
+# The Docker image is published separately by .github/workflows/docker.yml;
+# `skip_upload` for the archives keeps the two pipelines from fighting over the
+# same GHCR tag.
+version: 2
+
+project_name: mailer
+
+builds:
+  - id: mailer
+    main: .
+    binary: mailer
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
+    # Windows is excluded on purpose: the daemon's signal handling and file
+    # modes (0600 token files) assume a POSIX host.
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: mailer
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - README.zh-CN.md
+      - LICENSE
+      - config.example.yaml
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other changes
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  footer: |
+    **Container image:** `ghcr.io/elysola/mailer:{{ .Version }}`
+
+    Raw binaries are built with `CGO_ENABLED=0` and are static; the checksums
+    file is signed with cosign when run from CI.

@@ -97,8 +97,23 @@ accounts:
 ## Build
 
 ```bash
+make build          # CGO-free, version metadata injected from git
+# or, without make:
 go build -o mailer .
 ```
+
+`mailer version` prints what the binary was built from. Release builds get the
+real tag from GoReleaser; a local build reports `dev` plus the commit Go
+records in its build info.
+
+```console
+$ ./mailer version
+mailer v1.2.0 (9d1408b44ff5 linux/amd64, go1.26.10, 2026-11-07T13:48:28Z)
+```
+
+Tagged releases publish static linux/darwin binaries (amd64/arm64) with a
+checksums file, and a multi-arch container image under
+`ghcr.io/elysola/mailer`.
 
 ## Configure
 

@@ -7,12 +7,23 @@
 TINYGO ?= tinygo
 TINYGO_TARGET ?= wasip1
 
-.PHONY: all build test plugins clean-plugins
+# Build metadata injected into the binary. Release builds pass VERSION/COMMIT/
+# DATE on the command line; a local `make build` falls back to "dev" plus the
+# commit Go records in the build info, so the banner is never misleading.
+VERSION ?= dev
+COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -s -w \
+	-X main.version=$(VERSION) \
+	-X main.commit=$(COMMIT) \
+	-X main.date=$(DATE)
+
+.PHONY: all build test plugins clean-plugins release-check
 
 all: build
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o mailer .
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o mailer .
 
 test:
 	go vet ./...
@@ -31,3 +42,9 @@ plugins:
 
 clean-plugins:
 	@./scripts/plugins.sh clean
+
+# Validate the GoReleaser config and do a throwaway snapshot build. Catches a
+# broken .goreleaser.yaml before a tag turns it into a failed release.
+release-check:
+	goreleaser check
+	COSIGN_SKIP=1 goreleaser build --snapshot --clean

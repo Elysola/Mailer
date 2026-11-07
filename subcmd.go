@@ -236,6 +236,7 @@ Usage:
   mailer auth gmail -account a@b -client-id ID -client-secret-file F
                           authorize a Gmail mailbox over OAuth2 and emit a token
                           file for oauth2.token_file (--no-browser for headless)
+  mailer version          print version, commit and build metadata
 
 Flags:
   -config string   path to the YAML config file (default "config.yaml")
