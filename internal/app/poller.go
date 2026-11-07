@@ -11,6 +11,7 @@ import (
 	"github.com/elysola/mailer/internal/config"
 	"github.com/elysola/mailer/internal/mail"
 	"github.com/elysola/mailer/internal/notify"
+	"github.com/elysola/mailer/internal/oauth"
 	"github.com/elysola/mailer/internal/plugin"
 	"github.com/elysola/mailer/internal/state"
 )
@@ -35,6 +36,13 @@ type AccountStatus struct {
 	ConsecutiveFailures  int64   `json:"consecutive_failures"`
 	PendingNotifications int     `json:"pending_notifications"`
 	LastPollDurationSec  float64 `json:"last_poll_duration_seconds"`
+	// AuthFailed reports credentials the server rejected. Exposed because it
+	// is the one failure the daemon cannot recover from on its own.
+	AuthFailed bool `json:"auth_failed"`
+
+	// AuthAlerted is internal bookkeeping: the alert for the current failure
+	// was already sent. Never serialised.
+	AuthAlerted bool `json:"-"`
 }
 
 type Poller struct {
@@ -216,6 +224,7 @@ func (p *Poller) pollAll(ctx context.Context) {
 			if err := p.pollAccount(pollCtx, acc); err != nil {
 				log.Printf("[%s] poll error: %v", acc.Name, err)
 				p.notePollFailure(acc.Name)
+				p.alertAuthFailure(ctx, acc.Name, err)
 				return
 			}
 			p.notePollSuccess(acc.Name, time.Since(start))
@@ -231,6 +240,11 @@ func (p *Poller) notePollSuccess(account string, dur time.Duration) {
 		st.LastPollSuccessUnix = time.Now().Unix()
 		st.ConsecutiveFailures = 0
 		st.LastPollDurationSec = dur.Seconds()
+		// Clear the auth state so a later credential failure can alert
+		// again: the operator fixed it once and deserves to hear about a
+		// second breakage.
+		st.AuthAlerted = false
+		st.AuthFailed = false
 	}
 	p.mu.Unlock()
 	p.metrics.Observe("mailer_last_poll_duration_seconds", map[string]string{"account": account}, dur.Seconds())
@@ -244,6 +258,61 @@ func (p *Poller) notePollFailure(account string) {
 	}
 	p.mu.Unlock()
 	p.metrics.Inc("mailer_poll_failures_total", map[string]string{"account": account})
+}
+
+// alertAuthFailure surfaces a dead credential once, on the transition into the
+// failed state.
+//
+// A revoked or expired refresh token makes every poll fail with the same
+// permanent error, so without an alert the daemon silently stops delivering
+// notifications and nothing points at the cause. The de-duplication matters as
+// much as the alert: the poll interval would otherwise fire the same message
+// every minute and bury the one that counts.
+func (p *Poller) alertAuthFailure(ctx context.Context, account string, err error) {
+	if err == nil || !oauth.IsAuthError(err) {
+		return
+	}
+
+	p.mu.Lock()
+	st := p.status[account]
+	if st == nil || st.AuthAlerted {
+		p.mu.Unlock()
+		return
+	}
+	st.AuthAlerted = true
+	st.AuthFailed = true
+	p.mu.Unlock()
+
+	log.Printf("[%s] credentials rejected; re-run `mailer auth gmail` and redeploy the token: %v", account, err)
+	p.metrics.Inc("mailer_auth_failures_total", map[string]string{"account": account})
+
+	acc, ok := findAccount(p.cfg.Accounts, account)
+	if !ok {
+		return
+	}
+
+	msg := mail.Message{
+		Account: account,
+		Subject: fmt.Sprintf("[mailer] %s: mail authorization expired", account),
+		From:    "mailer",
+	}
+	body := fmt.Sprintf(
+		"Mail polling for %s stopped because the mail server rejected the stored credentials.\n\n"+
+			"Cause: %v\n\n"+
+			"Fix: re-run `mailer auth gmail`, copy the new token file to oauth2.token_file, then restart the daemon.\n"+
+			"Until then this account delivers no notifications.",
+		account, err,
+	)
+	msg.TitleOverride = msg.Subject
+	msg.TextOverride = body
+
+	go func() {
+		alertCtx, cancel := context.WithTimeout(ctx, pollTimeout)
+		defer cancel()
+		if sent := p.dispatch(alertCtx, msg, p.notifiersFor(acc)); len(sent) == 0 {
+			log.Printf("[%s] no notifier accepted the credential alert", account)
+		}
+	}()
 }
 
 func (p *Poller) pollAccount(ctx context.Context, acc config.Account) error {
