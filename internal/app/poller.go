@@ -11,6 +11,7 @@ import (
 	"github.com/elysola/mailer/internal/config"
 	"github.com/elysola/mailer/internal/mail"
 	"github.com/elysola/mailer/internal/notify"
+	"github.com/elysola/mailer/internal/plugin"
 	"github.com/elysola/mailer/internal/state"
 )
 
@@ -41,6 +42,7 @@ type Poller struct {
 	store         *state.Store
 	pool          *mail.Pool
 	notifiers     []notify.Notifier
+	plugins       *plugin.Engine
 	accNotifs     map[string][]string
 	firstRun      map[string]bool
 	mu            sync.Mutex
@@ -92,6 +94,19 @@ func New(cfg *config.Config, store *state.Store) (*Poller, error) {
 		notifiers = append(notifiers, discord)
 	}
 
+	plugins, err := plugin.LoadDir(cfg.PluginDir, plugin.Limits{
+		Timeout: cfg.PluginTimeout, MaxInput: cfg.PluginMaxInput, MaxOutput: cfg.PluginMaxOutput,
+	})
+	if err != nil {
+		for _, n := range notifiers {
+			if c, ok := n.(notify.Closer); ok {
+				c.Close()
+			}
+		}
+		pool.Close()
+		return nil, err
+	}
+
 	firstRun := make(map[string]bool, len(cfg.Accounts))
 	status := make(map[string]*AccountStatus, len(cfg.Accounts))
 	for _, a := range cfg.Accounts {
@@ -104,6 +119,7 @@ func New(cfg *config.Config, store *state.Store) (*Poller, error) {
 		store:     store,
 		pool:      pool,
 		notifiers: notifiers,
+		plugins:   plugins,
 		accNotifs: notifMap,
 		firstRun:  firstRun,
 		metrics:   NewMetrics(),
@@ -285,8 +301,24 @@ func (p *Poller) pollAccount(ctx context.Context, acc config.Account) error {
 	var fullyDelivered []uint32
 	for i := range res.Messages {
 		msg := &res.Messages[i]
+		wantNotifiers, pluginMatched := p.applyPlugin(ctx, msg)
 		msg.TitleTmpl = titleTmpl
 		msg.TextTmpl = textTmpl
+
+		// A plugin may narrow delivery to specific channels (for example send
+		// OTP codes to Telegram only). Unknown names are dropped; if the plugin
+		// names only channels that are not configured, fall back to the
+		// account default so the mail is not silently lost.
+		targets := notifiers
+		if pluginMatched && len(wantNotifiers) > 0 {
+			routed := filterNotifiers(notifiers, wantNotifiers)
+			if len(routed) == 0 {
+				log.Printf("[%s] plugin requested notifiers %v, none configured; using defaults",
+					acc.Name, wantNotifiers)
+			} else {
+				targets = routed
+			}
+		}
 
 		dup, err := p.store.IsDuplicate(acc.Name, msg.MessageID)
 		if err != nil {
@@ -296,7 +328,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc config.Account) error {
 			continue
 		}
 
-		failed := p.dispatch(ctx, *msg, notifiers)
+		failed := p.dispatch(ctx, *msg, targets)
 		if len(failed) == 0 {
 			fullyDelivered = append(fullyDelivered, msg.UID)
 			if err := p.store.MarkDelivered(acc.Name, msg.MessageID); err != nil {
@@ -307,14 +339,17 @@ func (p *Poller) pollAccount(ctx context.Context, acc config.Account) error {
 		// Undelivered for at least one notifier: queue for retry. LastUID
 		// still advances, but nothing is lost — the queue owns redelivery.
 		if err := p.store.EnqueuePending(state.Pending{
-			Account:   acc.Name,
-			UID:       msg.UID,
-			MessageID: msg.MessageID,
-			From:      msg.From,
-			Subject:   msg.Subject,
-			Date:      msg.Date,
-			Preview:   msg.Preview,
-			Failed:    failed,
+			Account:       acc.Name,
+			UID:           msg.UID,
+			MessageID:     msg.MessageID,
+			From:          msg.From,
+			Subject:       msg.Subject,
+			Date:          msg.Date,
+			Preview:       msg.Preview,
+			TitleOverride: msg.TitleOverride,
+			TextOverride:  msg.TextOverride,
+			Fields:        msg.Fields,
+			Failed:        failed,
 		}, time.Now().Add(pendingInitialDelay)); err != nil {
 			log.Printf("[%s] enqueue pending: %v", acc.Name, err)
 		}
@@ -373,15 +408,18 @@ func (p *Poller) retryPending(ctx context.Context, acc config.Account) {
 		}
 
 		msg := mail.Message{
-			Account:   item.Account,
-			UID:       item.UID,
-			MessageID: item.MessageID,
-			From:      item.From,
-			Subject:   item.Subject,
-			Date:      item.Date,
-			Preview:   item.Preview,
-			TitleTmpl: titleTmpl,
-			TextTmpl:  textTmpl,
+			Account:       item.Account,
+			UID:           item.UID,
+			MessageID:     item.MessageID,
+			From:          item.From,
+			Subject:       item.Subject,
+			Date:          item.Date,
+			Preview:       item.Preview,
+			TitleOverride: item.TitleOverride,
+			TextOverride:  item.TextOverride,
+			Fields:        item.Fields,
+			TitleTmpl:     titleTmpl,
+			TextTmpl:      textTmpl,
 		}
 		failed := p.dispatch(ctx, msg, targets)
 		if len(failed) == 0 {
@@ -459,6 +497,33 @@ func (p *Poller) notifiersFor(acc config.Account) []notify.Notifier {
 		return filtered
 	}
 	return p.notifiers
+}
+
+// applyPlugin lets a WASM processor rewrite the message. It returns the
+// notifier names the plugin wants to target (empty means "no opinion") and
+// whether a plugin actually matched. Errors are logged and swallowed: a broken
+// plugin must never disturb the UID cursor or the retry queue.
+func (p *Poller) applyPlugin(ctx context.Context, msg *mail.Message) ([]string, bool) {
+	if p.plugins == nil || msg == nil {
+		return nil, false
+	}
+	result, err := p.plugins.Process(ctx, plugin.Mail{
+		Account: msg.Account, UID: msg.UID, MessageID: msg.MessageID,
+		From: msg.From, To: msg.To, Cc: msg.Cc, Subject: msg.Subject,
+		Date: msg.Date, Text: msg.BodyText, HTML: msg.HTML,
+		Preview: msg.Preview, Headers: msg.Headers,
+	})
+	if err != nil {
+		log.Printf("[%s] plugin processing: %v", msg.Account, err)
+		return nil, false
+	}
+	if !result.Matched {
+		return nil, false
+	}
+	msg.TitleOverride = result.Title
+	msg.TextOverride = result.Text
+	msg.Fields = result.Fields
+	return result.Notifiers, true
 }
 
 func (p *Poller) templateFor(field string, acc config.Account) string {
