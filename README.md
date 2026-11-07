@@ -403,7 +403,9 @@ $ curl -s localhost:9100/status
 hostnames, usernames, message content, or raw error strings, so it can be
 scraped or exposed behind a reverse proxy without leaking credentials.
 
-Configure the port with `health_port` (set to `0` to disable the server).
+Configure the port with `health_port` (default `9100`; set it to `0` to run
+without the HTTP server entirely — nothing is bound and no listener is
+started).
 
 Useful metrics:
 

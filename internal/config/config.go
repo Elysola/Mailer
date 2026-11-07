@@ -9,11 +9,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultHealthPort is used when `health_port` is omitted from the config.
+const DefaultHealthPort = 9100
+
 // Config is the top-level application configuration.
 type Config struct {
-	PollInterval         time.Duration    `yaml:"poll_interval"`
-	StateFile            string           `yaml:"state_file"`
-	HealthPort           int              `yaml:"health_port"`
+	PollInterval time.Duration `yaml:"poll_interval"`
+	StateFile    string        `yaml:"state_file"`
+	// HealthPort is a pointer so that "absent" and "explicitly disabled"
+	// stay distinguishable: YAML cannot express the difference in a plain
+	// int, and `health_port: 0` must mean "no HTTP server", not "use 9100".
+	HealthPort           *int             `yaml:"health_port"`
 	RetryAttempts        int              `yaml:"retry_attempts"`
 	RetryDelay           time.Duration    `yaml:"retry_delay"`
 	NoopInterval         time.Duration    `yaml:"noop_interval"`
@@ -137,6 +143,19 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// HealthListenPort returns the port the health/status/metrics server should
+// bind, and whether it should run at all. `health_port: 0` (or any negative
+// value) disables the server; omitting the key uses DefaultHealthPort.
+func (c *Config) HealthListenPort() (port int, enabled bool) {
+	if c.HealthPort == nil {
+		return DefaultHealthPort, true
+	}
+	if *c.HealthPort <= 0 {
+		return 0, false
+	}
+	return *c.HealthPort, true
+}
+
 func (c *Config) applyDefaults() {
 	if c.PollInterval <= 0 {
 		c.PollInterval = 60 * time.Second
@@ -144,8 +163,9 @@ func (c *Config) applyDefaults() {
 	if c.StateFile == "" {
 		c.StateFile = "state.db"
 	}
-	if c.HealthPort <= 0 {
-		c.HealthPort = 9100
+	if c.HealthPort == nil {
+		port := DefaultHealthPort
+		c.HealthPort = &port
 	}
 	if c.RetryAttempts <= 0 {
 		c.RetryAttempts = 2
@@ -285,6 +305,9 @@ func (c *Config) resolveSecrets() error {
 }
 
 func (c *Config) validate() error {
+	if port, ok := c.HealthListenPort(); ok && port > 65535 {
+		return fmt.Errorf("health_port %d is not a valid TCP port", port)
+	}
 	if len(c.Accounts) == 0 {
 		return fmt.Errorf("no accounts configured")
 	}

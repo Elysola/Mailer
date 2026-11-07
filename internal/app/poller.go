@@ -18,11 +18,9 @@ import (
 
 const (
 	pollTimeout = 30 * time.Second
-
 	// pendingAgeLimit is how long an undelivered notification may sit in the
 	// retry queue before it is dropped and counted.
-	pendingAgeLimit = 7 * 24 * time.Hour
-	// pendingInitialDelay is the backoff after the first failure; each
+	pendingAgeLimit = 7 * 24 * time.Hour // pendingInitialDelay is the backoff after the first failure; each
 	// subsequent round doubles it up to pendingMaxDelay.
 	pendingInitialDelay = 30 * time.Second
 	pendingMaxDelay     = time.Hour
@@ -30,7 +28,25 @@ const (
 	seenCleanInterval = 24 * time.Hour
 )
 
-// AccountStatus is the non-sensitive health summary for one account.
+// pollDeadline derives the per-account poll budget from the poll interval.
+//
+// A fixed 30 s constant is wrong at both ends: with a 10 s interval polls
+// would overlap, and a slow mailbox on a 5 m interval would be abandoned long
+// before it could finish. We take 80% of the interval so a sustained slow poll
+// can never pile up on the next tick, but never allow less than a few seconds
+// for the IMAP round-trips (or more than the historical 30 s, which is already
+// generous for a single mailbox).
+func pollDeadline(interval time.Duration) time.Duration {
+	d := interval * 8 / 10
+	if d < 5*time.Second {
+		return 5 * time.Second
+	}
+	if d > pollTimeout {
+		return pollTimeout
+	}
+	return d
+}
+
 type AccountStatus struct {
 	LastPollSuccessUnix  int64   `json:"last_poll_success_unix"`
 	ConsecutiveFailures  int64   `json:"consecutive_failures"`
@@ -218,7 +234,7 @@ func (p *Poller) pollAll(ctx context.Context) {
 		wg.Add(1)
 		go func(acc config.Account) {
 			defer wg.Done()
-			pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
+			pollCtx, cancel := context.WithTimeout(ctx, pollDeadline(p.cfg.PollInterval))
 			defer cancel()
 			start := time.Now()
 			if err := p.pollAccount(pollCtx, acc); err != nil {
@@ -622,12 +638,17 @@ func (p *Poller) dispatch(ctx context.Context, msg mail.Message, notifiers []not
 	var failed []string
 	for _, n := range notifiers {
 		ok := false
+	attempts:
 		for attempt := 0; attempt <= p.cfg.RetryAttempts; attempt++ {
 			if attempt > 0 {
 				delay := p.cfg.RetryDelay * (1 << (attempt - 1))
 				select {
 				case <-ctx.Done():
-					break
+					// Abandon this notifier: the poll budget is gone, so further
+					// attempts would fail for the same reason. A bare `break` would
+					// only leave the select and keep retrying with a dead context.
+					log.Printf("[%s] %s notify aborted: %v", msg.Account, n.Name(), ctx.Err())
+					break attempts
 				case <-time.After(delay):
 				}
 			}

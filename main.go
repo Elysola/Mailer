@@ -61,6 +61,32 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var server *http.Server
+	port, httpEnabled := cfg.HealthListenPort()
+	if httpEnabled {
+		server = newHTTPServer(port, poller)
+		go func() {
+			log.Printf("HTTP server listening on :%d", port)
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("http server: %v", err)
+			}
+		}()
+	} else {
+		log.Print("health HTTP server disabled (health_port: 0)")
+	}
+
+	poller.Run(ctx)
+
+	if server != nil {
+		if err := server.Shutdown(context.Background()); err != nil {
+			log.Printf("http shutdown: %v", err)
+		}
+	}
+	log.Print("bye")
+}
+
+// newHTTPServer builds the health/status/metrics mux for the given port.
+func newHTTPServer(port int, poller *app.Poller) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -88,21 +114,8 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.HealthPort),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}
-
-	go func() {
-		log.Printf("HTTP server listening on :%d", cfg.HealthPort)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("http server: %v", err)
-		}
-	}()
-
-	poller.Run(ctx)
-
-	if err := server.Shutdown(context.Background()); err != nil {
-		log.Printf("http shutdown: %v", err)
-	}
-	log.Print("bye")
+	return server
 }

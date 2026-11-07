@@ -133,6 +133,66 @@ discord:
 	}
 }
 
+func TestHealthPortDisableAndDefault(t *testing.T) {
+	base := `
+accounts:
+  - name: a
+    host: h
+    username: u
+    password: p
+telegram:
+  enabled: true
+  bot_token: "t"
+  chat_ids: ["1"]
+`
+
+	// Omitted key: default port, server runs.
+	cfg, err := Load(writeTemp(t, base))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if port, ok := cfg.HealthListenPort(); !ok || port != DefaultHealthPort {
+		t.Errorf("default HealthListenPort() = (%d, %v), want (%d, true)", port, ok, DefaultHealthPort)
+	}
+
+	// Explicit 0: server disabled. This is the documented behaviour and used
+	// to be silently overridden back to 9100.
+	cfg, err = Load(writeTemp(t, base+"health_port: 0\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if port, ok := cfg.HealthListenPort(); ok {
+		t.Errorf("HealthListenPort() = (%d, true), want disabled for health_port: 0", port)
+	}
+
+	// Explicit custom port is honoured.
+	cfg, err = Load(writeTemp(t, base+"health_port: 8080\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if port, ok := cfg.HealthListenPort(); !ok || port != 8080 {
+		t.Errorf("HealthListenPort() = (%d, %v), want (8080, true)", port, ok)
+	}
+}
+
+func TestHealthPortOutOfRangeRejected(t *testing.T) {
+	path := writeTemp(t, `
+health_port: 70000
+accounts:
+  - name: a
+    host: h
+    username: u
+    password: p
+telegram:
+  enabled: true
+  bot_token: "t"
+  chat_ids: ["1"]
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for out-of-range health_port")
+	}
+}
+
 func TestValidateNoAccounts(t *testing.T) {
 	path := writeTemp(t, `
 telegram:
