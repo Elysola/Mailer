@@ -32,6 +32,11 @@
   （embed 限制）上限截断，长邮件不会再以看不懂的 API 错误收场。
 - **可自定义消息模板** — 使用 Go `text/template` 自定义标题和正文格式，支持
   全局和每账户覆盖。
+- **WASM 邮件解析插件** — 在 `plugin_dir` 放置 WASM 插件，对邮件正文做正则/
+  代码级解析（提取验证码、PR 链接等）并生成自定义标题与正文。插件运行于
+  wazero 解释器沙箱：无 WASI、无文件/网络/环境变量访问，并受超时、输入与
+  输出大小限制约束。插件失败不影响 UID 游标、Message-ID 去重与补发队列。
+  仓库自带 `otp` 示例插件（提取 6 位验证码）。见 `plugins/README.md`。
 - 支持 Telegram（Bot API，**MarkdownV2** 模式）与 Discord（Webhook 或 Bot Token）投递。
 - **每账户通知器路由** — 选择每个账户使用哪些通知渠道（Telegram、Discord 或两者）。
 - **按账户分别路由 Discord**，可发送到指定的频道（channel）或子区（thread）。
@@ -261,6 +266,80 @@ message_template:
 可用字段：`{{.From}}`、`{{.Subject}}`、`{{.Date}}`、`{{.Preview}}`、
 `{{.MessageID}}`、`{{.Text}}`（完整正文）、`{{.Account}}`（配置中的账户名称）。
 
+## WASM 解析插件
+
+当内置模板不够用（例如需要提取验证码、解析结构化通知）时，可以放入 WASM
+解析插件。插件接收完整的邮件 JSON（含 `text`、`html`、`headers`），返回是否
+匹配，以及自定义的标题与正文：
+
+```yaml
+plugin_dir: ./plugins        # 插件目录；留空则禁用插件
+plugin_timeout: 100ms        # 单个插件的执行上限
+plugin_max_input: 524288     # 传入插件的 JSON 上限（字节）
+plugin_max_output: 16384     # 插件返回的 JSON 上限（字节）
+```
+
+目录下每个插件由 `plugin.yaml` 清单与 `.wasm` 入口组成（也支持平铺布局
+`plugins/otp.yaml` + `plugins/otp.wasm`）。插件按 `priority` 降序执行，
+**首个返回 `matched: true` 的插件生效**，其余跳过。
+
+插件运行在 wazero 解释器沙箱中：不启用 WASI，无法访问文件、网络或环境变量，
+也没有通知 API。执行受超时与输入/输出大小限制约束；插件报错或超时只会记录
+日志并回退到默认模板，不会影响 UID 游标、Message-ID 去重或补发队列。
+
+### 声明式正则提取
+
+TinyGo 的 `regexp` 无法在 wazero reactor 模块中运行，因此正则由**宿主**执行：
+在清单里写 `patterns`，捕获结果会合并进 `result.fields`，模板中可用
+`{{.Fields.<name>}}` 引用。
+
+```yaml
+patterns:
+  - name: repo
+    regexp: '([\w.-]+/[\w.-]+)#(\d+)'
+    source: subject   # text（默认）| html | subject | preview | from
+    group: 1          # 0（默认）表示整个匹配
+  - name: pr
+    regexp: '([\w.-]+/[\w.-]+)#(\d+)'
+    source: subject
+    group: 2
+  - name: code
+    regexp: '\b(\d{6})\b'
+    source: text
+    required: true    # 未匹配即报错，而不是静默返回空字段
+```
+
+规则说明：
+
+- 使用 Go RE2 语法，在 WASM 模块之前对解码后的邮件文本求值，因此**完全不做
+  解析的插件也能用正则**。
+- 插件自己返回的同名字段优先——插件掌握的上下文比通用正则更多。
+- 正则非法、`source` 未知、`group` 越界都会在加载时被拒绝，
+  `mailer plugins validate` 即可发现。
+- `required: true` 时未匹配视为插件错误（记录日志，邮件仍按默认模板投递）。
+
+### 宿主消费的结果字段
+
+| 字段 | 效果 |
+|---|---|
+| `matched` | `false` 继续尝试下一个插件；`true` 立即生效 |
+| `fields` | 供模板以 `{{.Fields.key}}` 引用 |
+| `title` / `text` | 覆盖渲染出的通知标题与正文 |
+| `notifiers` | 把投递收窄到指定渠道。未配置的渠道名会被丢弃；若全部无效则回退到账户默认渠道，避免邮件被静默丢弃 |
+
+`fields`、`title`、`text`、`notifiers` 都会随补发队列持久化，通知器临时故障
+重试后不会退化成默认模板。
+
+```bash
+mailer plugins list     --dir ./plugins   # 列出已加载插件
+mailer plugins validate --dir ./plugins   # 校验清单与入口
+mailer plugins test --dir ./plugins --input ./plugins/sample-mail.json
+```
+
+插件开发（manifest 格式、JSON ABI、构建方式）见
+[`plugins/README.md`](plugins/README.md)。仓库自带 `otp` 示例插件，可从邮件
+正文提取 6 位验证码。
+
 ## 健康检查、状态与 Prometheus 指标
 
 内置 HTTP 服务器（默认端口 **9100**）提供三个端点：
@@ -442,6 +521,9 @@ internal/mail                 IMAP 拉取、MIME 预览提取与清理、标记�
 internal/mail/pool.go         双连接（watch/work）IMAP 连接池与 NOOP 保活
 internal/notify               Telegram (+MarkdownV2) + Discord 通知器，
                               平台上限截断
+internal/plugin               WASM 插件宿主（wazero 沙箱、manifest 加载、
+                              JSON ABI、超时与大小限制）
+plugins/                      示例插件与插件开发文档（otp 验证码提取）
 internal/state                SQLite：UID 进度、Message-ID 去重、待补发队列
 internal/app                  将拉取 + 通知 + 补发队列 + 状态串联起来的调度器
 internal/app/metrics.go       Prometheus 指标计数器

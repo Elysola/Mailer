@@ -40,6 +40,13 @@ and pushes a notification to **Telegram** and/or **Discord** bots.
   deliver with an opaque API error.
 - **Customizable message templates** — use Go `text/template` to format title
   and body globally or per-account.
+- **WASM mail parsing plugins** — drop WASM processors into `plugin_dir` to
+  parse the full body (extract codes, links, structured fields) and build a
+  custom title and body. Plugins run in a wazero interpreter sandbox: no WASI,
+  no filesystem, network or environment access, bounded by timeout and
+  input/output size limits. A failing plugin never disturbs the UID cursor,
+  Message-ID de-duplication or the retry queue. Ships with an `otp` example
+  plugin that extracts 6-digit verification codes. See `plugins/README.md`.
 - Telegram (Bot API, **MarkdownV2** mode) and Discord (webhook or bot token)
   delivery.
 - **Per-account notifier routing** — choose which notifiers (Telegram, Discord,
@@ -290,6 +297,86 @@ The global template applies to every account; an account-level
 Available fields: `{{.From}}`, `{{.Subject}}`, `{{.Date}}`, `{{.Preview}}`,
 `{{.MessageID}}`, `{{.Text}}` (full body), `{{.Account}}` (config account name).
 
+## WASM parsing plugins
+
+When templates are not enough (extracting verification codes, parsing
+structured notifications), drop WASM processors into a directory. A plugin
+receives the full mail as JSON (including `text`, `html` and `headers`) and
+returns whether it matched plus an optional custom title and body:
+
+```yaml
+plugin_dir: ./plugins        # plugin directory; empty disables plugins
+plugin_timeout: 100ms        # per-plugin execution budget
+plugin_max_input: 524288     # max JSON bytes handed to the plugin
+plugin_max_output: 16384     # max JSON bytes returned by the plugin
+```
+
+Each plugin is a `plugin.yaml` manifest plus a `.wasm` entrypoint (a flat
+`plugins/otp.yaml` + `plugins/otp.wasm` layout also works). Plugins run in
+descending `priority` order and the **first result with `matched: true`
+wins**.
+
+Plugins execute inside a wazero interpreter sandbox: WASI is not enabled, so
+there is no filesystem, network or environment access, and no notification
+API. Execution is bounded by the timeout and the input/output limits. A
+plugin that errors or times out is logged and the default template is used;
+the UID cursor, Message-ID de-duplication and the retry queue are untouched.
+
+### Declarative regex patterns
+
+TinyGo's `regexp` cannot run inside a wazero reactor module, so the host
+evaluates regexes for you. List `patterns` in the manifest and their captures
+land in `result.fields`, addressable from templates as `{{.Fields.<name>}}`:
+
+```yaml
+patterns:
+  - name: repo
+    regexp: '([\w.-]+/[\w.-]+)#(\d+)'
+    source: subject   # text (default) | html | subject | preview | from
+    group: 1          # 0 (default) = whole match
+  - name: pr
+    regexp: '([\w.-]+/[\w.-]+)#(\d+)'
+    source: subject
+    group: 2
+  - name: code
+    regexp: '\b(\d{6})\b'
+    source: text
+    required: true    # a miss is an error, not a silent empty field
+```
+
+- Patterns use Go RE2 syntax and run against the decoded mail text *before*
+  the WASM module, so even a plugin that does no parsing gets regex power.
+- A field the plugin already returned wins over a pattern of the same name;
+  plugins know more context than a generic pattern.
+- Invalid regexps, unknown `source` values, and out-of-range `group` numbers
+  are rejected at load time, so `mailer plugins validate` catches them.
+- `required: true` turns a miss into a plugin error (logged; the message is
+  still delivered with the default template).
+
+### Result fields the host consumes
+
+| Field | Effect |
+|---|---|
+| `matched` | `false` moves on to the next plugin; `true` stops the search |
+| `fields` | Available to templates as `{{.Fields.key}}` |
+| `title` / `text` | Override the rendered notification |
+| `notifiers` | Narrow delivery to these channel names. Names that are not configured are dropped; if none remain the account default is used so mail is never silently lost |
+
+`fields`, `title`, `text` and `notifiers` all survive redelivery: they are
+persisted with the retry queue, so a transient notifier failure does not
+downgrade the message to the default template.
+
+```bash
+mailer plugins list     --dir ./plugins   # list loaded plugins
+mailer plugins validate --dir ./plugins   # check manifest and entrypoint
+mailer plugins test --dir ./plugins --input ./plugins/sample-mail.json
+```
+
+Plugin authoring (manifest schema, JSON ABI, build instructions) lives in
+[`plugins/README.md`](plugins/README.md). The bundled `otp` plugin extracts
+6-digit verification codes from the mail body.
+
+
 ## Health check, status & Prometheus metrics
 
 A built-in HTTP server (default port **9100**) exposes three endpoints:
@@ -481,7 +568,10 @@ internal/mail                 IMAP fetch, MIME preview extraction + cleanup,
 internal/mail/pool.go         dual (watch/work) IMAP connection pool with
                               NOOP keepalive
 internal/notify               Telegram (+MarkdownV2) + Discord notifiers,
-                              platform-limit truncation
+                              platform cap truncation
+internal/plugin               WASM plugin host (wazero sandbox, manifest
+                              loading, JSON ABI, timeout & size limits)
+plugins/                      example plugin and authoring docs (otp)
 internal/state                SQLite: UID progress, Message-ID dedup,
                               pending-notification queue
 internal/app                  scheduler tying fetch + notify + retry queue +

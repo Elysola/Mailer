@@ -23,6 +23,19 @@ read_button: false
 # to prevent server-side timeouts.
 noop_interval: 30s
 
+# Optional directory containing WASM mail processors. Each plugin is a YAML
+# manifest next to a .wasm file. Plugins use the versioned mailer.plugin.v1
+# JSON in/out ABI and are tried by priority, highest first.
+#
+# A manifest may also declare `patterns` (host-evaluated RE2 regexes) whose
+# captures become result fields, usable in mail_template as {{.Fields.name}}.
+# Plugin results can override the title/text and narrow delivery via
+# `notifiers`; all of it is persisted with the retry queue.
+# plugin_dir: ./plugins
+# plugin_timeout: 100ms
+# plugin_max_input: 524288
+# plugin_max_output: 16384
+
 # Max characters of preview text extracted from each mail body. Any notifier
 # further truncates to its own platform limit (e.g. Telegram 4096 chars).
 # Can be overridden per account. Default 400.
