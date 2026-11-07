@@ -2,6 +2,7 @@ package state
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,9 +29,18 @@ type Pending struct {
 	Date      time.Time
 	Preview   string
 	Failed    []string // notifier names still undelivered
-	Attempts  int
-	NextTry   time.Time
-	Created   time.Time
+
+	// TitleOverride and TextOverride carry a parsed plugin's rendered output
+	// across retries, so a redelivery keeps the plugin's wording instead of
+	// falling back to the default template. Fields carries the structured
+	// values a template may still want to reference.
+	TitleOverride string
+	TextOverride  string
+	Fields        map[string]string
+
+	Attempts int
+	NextTry  time.Time
+	Created  time.Time
 }
 
 type Store struct {
@@ -60,6 +70,9 @@ CREATE TABLE IF NOT EXISTS pending_notifications (
     date_unix    INTEGER NOT NULL DEFAULT 0,
     preview      TEXT    NOT NULL DEFAULT '',
     failed       TEXT    NOT NULL DEFAULT '',
+    title_override TEXT  NOT NULL DEFAULT '',
+    text_override  TEXT  NOT NULL DEFAULT '',
+    fields         TEXT  NOT NULL DEFAULT '',
     attempts     INTEGER NOT NULL DEFAULT 0,
     next_try_unix INTEGER NOT NULL DEFAULT 0,
     created_unix INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -86,7 +99,76 @@ func Load(path string) (*Store, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
+	// Columns added after the first release. CREATE TABLE IF NOT EXISTS does
+	// not touch an existing table, so databases created before these columns
+	// existed need an explicit additive migration.
+	if err := migratePendingColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return &Store{db: db}, nil
+}
+
+// pendingMigration adds one column to pending_notifications. Both the probe
+// and the DDL are compile-time constants so no identifier ever reaches SQL
+// as interpolated data.
+type pendingMigration struct {
+	column string
+	ddl    string
+}
+
+var pendingMigrations = []pendingMigration{
+	{"title_override", "ALTER TABLE pending_notifications ADD COLUMN title_override TEXT NOT NULL DEFAULT ''"},
+	{"text_override", "ALTER TABLE pending_notifications ADD COLUMN text_override TEXT NOT NULL DEFAULT ''"},
+	{"fields", "ALTER TABLE pending_notifications ADD COLUMN fields TEXT NOT NULL DEFAULT ''"},
+}
+
+// migratePendingColumns applies pendingMigrations to legacy databases. It is
+// idempotent: a column that already exists is skipped.
+func migratePendingColumns(db *sql.DB) error {
+	existing, err := pendingColumns(db)
+	if err != nil {
+		return err
+	}
+	for _, m := range pendingMigrations {
+		if existing[m.column] {
+			continue
+		}
+		if _, err := db.Exec(m.ddl); err != nil {
+			return fmt.Errorf("add column pending_notifications.%s: %w", m.column, err)
+		}
+	}
+	return nil
+}
+
+// pendingColumns returns the set of column names currently on
+// pending_notifications.
+func pendingColumns(db *sql.DB) (map[string]bool, error) {
+	rows, err := db.Query("PRAGMA table_info(pending_notifications)")
+	if err != nil {
+		return nil, fmt.Errorf("inspect pending_notifications: %w", err)
+	}
+	defer rows.Close()
+
+	cols := make(map[string]bool, 16)
+	for rows.Next() {
+		var (
+			cid        int
+			name, typ  string
+			notNull    int
+			dflt       sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &primaryKey); err != nil {
+			return nil, fmt.Errorf("inspect pending_notifications: %w", err)
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect pending_notifications: %w", err)
+	}
+	return cols, nil
 }
 
 func (s *Store) Close() error {
@@ -189,8 +271,8 @@ func (s *Store) EnqueuePending(p Pending, nextTry time.Time) error {
 	}
 	_, err = s.db.Exec(`
 INSERT INTO pending_notifications
-    (account, uid, message_id, sender, subject, date_unix, preview, failed, attempts, next_try_unix, created_unix)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attempts, next_try_unix, created_unix)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(account, uid) DO UPDATE SET
     message_id = excluded.message_id,
     sender     = excluded.sender,
@@ -198,9 +280,13 @@ ON CONFLICT(account, uid) DO UPDATE SET
     date_unix  = excluded.date_unix,
     preview    = excluded.preview,
     failed     = excluded.failed,
+    title_override = excluded.title_override,
+    text_override  = excluded.text_override,
+    fields         = excluded.fields,
     next_try_unix = excluded.next_try_unix`,
 		p.Account, p.UID, p.MessageID, p.From, p.Subject,
 		p.Date.Unix(), p.Preview, strings.Join(failed, ","),
+		p.TitleOverride, p.TextOverride, encodeFields(p.Fields),
 		attempts, nextTry.Unix(), created.Unix(),
 	)
 	if err != nil {
@@ -212,13 +298,14 @@ ON CONFLICT(account, uid) DO UPDATE SET
 func (s *Store) getPending(account string, uid uint32) (Pending, bool, error) {
 	var p Pending
 	var dateUnix, nextTry, created int64
-	var failed string
+	var failed, fieldsJSON string
 	err := s.db.QueryRow(`
-SELECT account, uid, message_id, sender, subject, date_unix, preview, failed, attempts, next_try_unix, created_unix
+SELECT account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attempts, next_try_unix, created_unix
 FROM pending_notifications WHERE account = ? AND uid = ?`,
 		account, uid,
 	).Scan(&p.Account, &p.UID, &p.MessageID, &p.From, &p.Subject,
-		&dateUnix, &p.Preview, &failed, &p.Attempts, &nextTry, &created)
+		&dateUnix, &p.Preview, &failed, &p.TitleOverride, &p.TextOverride, &fieldsJSON,
+		&p.Attempts, &nextTry, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pending{}, false, nil
 	}
@@ -229,6 +316,7 @@ FROM pending_notifications WHERE account = ? AND uid = ?`,
 	p.NextTry = time.Unix(nextTry, 0)
 	p.Created = time.Unix(created, 0)
 	p.Failed = splitCSV(failed)
+	p.Fields = decodeFields(fieldsJSON)
 	return p, true, nil
 }
 
@@ -237,7 +325,7 @@ FROM pending_notifications WHERE account = ? AND uid = ?`,
 // the loop), so a poll cycle cannot stall behind an unreachable notifier.
 func (s *Store) DuePending(account string, now time.Time, limit int) ([]Pending, error) {
 	rows, err := s.db.Query(`
-SELECT account, uid, message_id, sender, subject, date_unix, preview, failed, attempts, next_try_unix, created_unix
+SELECT account, uid, message_id, sender, subject, date_unix, preview, failed, title_override, text_override, fields, attempts, next_try_unix, created_unix
 FROM pending_notifications
 WHERE account = ? AND next_try_unix <= ?
 ORDER BY uid LIMIT ?`,
@@ -252,15 +340,17 @@ ORDER BY uid LIMIT ?`,
 	for rows.Next() {
 		var p Pending
 		var dateUnix, nextTry, created int64
-		var failed string
+		var failed, fieldsJSON string
 		if err := rows.Scan(&p.Account, &p.UID, &p.MessageID, &p.From, &p.Subject,
-			&dateUnix, &p.Preview, &failed, &p.Attempts, &nextTry, &created); err != nil {
+			&dateUnix, &p.Preview, &failed, &p.TitleOverride, &p.TextOverride, &fieldsJSON,
+			&p.Attempts, &nextTry, &created); err != nil {
 			return nil, fmt.Errorf("scan pending: %w", err)
 		}
 		p.Date = time.Unix(dateUnix, 0)
 		p.NextTry = time.Unix(nextTry, 0)
 		p.Created = time.Unix(created, 0)
 		p.Failed = splitCSV(failed)
+		p.Fields = decodeFields(fieldsJSON)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -297,6 +387,32 @@ func (s *Store) PendingCount(account string) (int, error) {
 		return 0, fmt.Errorf("count pending: %w", err)
 	}
 	return n, nil
+}
+
+// encodeFields serialises plugin-extracted fields for storage. An empty map
+// stores as the empty string so legacy rows and plugin-less rows look alike.
+func encodeFields(fields map[string]string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// decodeFields reverses encodeFields. Malformed JSON is treated as absent
+// rather than failing the whole retry: a corrupt cache must not block mail.
+func decodeFields(s string) map[string]string {
+	if s == "" {
+		return nil
+	}
+	var fields map[string]string
+	if err := json.Unmarshal([]byte(s), &fields); err != nil {
+		return nil
+	}
+	return fields
 }
 
 func splitCSV(s string) []string {

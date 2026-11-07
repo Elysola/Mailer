@@ -1,6 +1,7 @@
 package state
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -215,4 +216,101 @@ func TestExplicitCreatedHonoredOnlyOnInsert(t *testing.T) {
 	if !got.Created.Equal(old.Truncate(time.Second)) && got.Created.After(time.Now().Add(-time.Hour)) {
 		t.Errorf("created overwritten on re-enqueue: %v want ~%v", got.Created, old)
 	}
+}
+
+func TestPendingPersistsPluginOverrides(t *testing.T) {
+	s := newStore(t)
+	p := Pending{
+		Account:       "a",
+		UID:           7,
+		MessageID:     "<p@x>",
+		Preview:       "pv",
+		TitleOverride: "验证码",
+		TextOverride:  "🔐 验证码：690831",
+		Failed:        []string{"telegram"},
+	}
+	if err := s.EnqueuePending(p, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := s.getPending("a", 7)
+	if err != nil || !found {
+		t.Fatalf("getPending: found=%v err=%v", found, err)
+	}
+	if got.TitleOverride != p.TitleOverride {
+		t.Errorf("title override = %q, want %q", got.TitleOverride, p.TitleOverride)
+	}
+	if got.TextOverride != p.TextOverride {
+		t.Errorf("text override = %q, want %q", got.TextOverride, p.TextOverride)
+	}
+
+	// DuePending must carry them too: retryPending rebuilds the message from it.
+	due, err := s.DuePending("a", time.Now(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("due = %d rows, want 1", len(due))
+	}
+	if due[0].TitleOverride != p.TitleOverride || due[0].TextOverride != p.TextOverride {
+		t.Errorf("DuePending dropped overrides: %+v", due[0])
+	}
+}
+
+func TestLoadMigratesLegacyPendingTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Build a database shaped like the pre-plugin schema.
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`
+CREATE TABLE pending_notifications (
+    account      TEXT    NOT NULL,
+    uid          INTEGER NOT NULL,
+    message_id   TEXT    NOT NULL DEFAULT '',
+    sender       TEXT    NOT NULL DEFAULT '',
+    subject      TEXT    NOT NULL DEFAULT '',
+    date_unix    INTEGER NOT NULL DEFAULT 0,
+    preview      TEXT    NOT NULL DEFAULT '',
+    failed       TEXT    NOT NULL DEFAULT '',
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    next_try_unix INTEGER NOT NULL DEFAULT 0,
+    created_unix INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (account, uid)
+);
+INSERT INTO pending_notifications (account, uid, message_id, preview, failed)
+VALUES ('a', 1, '<old@x>', 'legacy preview', 'telegram');
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load on legacy db: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	got, found, err := s.getPending("a", 1)
+	if err != nil || !found {
+		t.Fatalf("getPending: found=%v err=%v", found, err)
+	}
+	if got.Preview != "legacy preview" {
+		t.Errorf("legacy row lost: %+v", got)
+	}
+	if got.TitleOverride != "" || got.TextOverride != "" {
+		t.Errorf("new columns not defaulted: %+v", got)
+	}
+
+	// Re-running Load must be a no-op (idempotent migration).
+	s2, err := Load(path)
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	t.Cleanup(func() { s2.Close() })
 }
