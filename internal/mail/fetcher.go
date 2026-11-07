@@ -202,12 +202,15 @@ func buildMessage(accountName string, previewLen int, buf *imapclient.FetchMessa
 	m := Message{
 		Account: accountName,
 		UID:     uint32(buf.UID),
+		Headers: make(map[string]string),
 	}
 
 	if env := buf.Envelope; env != nil {
 		m.Subject = env.Subject
 		m.Date = env.Date
 		m.From = formatAddresses(env.From)
+		m.To = formatAddressesList(env.To)
+		m.Cc = formatAddressesList(env.Cc)
 		m.MessageID = env.MessageID
 	}
 	if m.Date.IsZero() {
@@ -218,13 +221,24 @@ func buildMessage(accountName string, previewLen int, buf *imapclient.FetchMessa
 		if len(bs.Bytes) == 0 {
 			continue
 		}
-		if preview := extractPreview(bs.Bytes, previewLen); preview != "" {
-			m.Preview = preview
+		m.BodyText, m.HTML = extractBodies(bs.Bytes)
+		m.Preview = previewFromBodies(m.BodyText, m.HTML, previewLen)
+		if m.Preview != "" {
 			break
 		}
 	}
 
 	return m
+}
+
+func formatAddressesList(addrs []imap.Address) []string {
+	parts := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if value := formatAddresses([]imap.Address{a}); value != "" {
+			parts = append(parts, value)
+		}
+	}
+	return parts
 }
 
 func formatAddresses(addrs []imap.Address) string {
@@ -242,6 +256,47 @@ func formatAddresses(addrs []imap.Address) string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+func extractBodies(raw []byte) (plain, htmlBody string) {
+	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
+	if err != nil {
+		return "", ""
+	}
+	defer mr.Close()
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF || err != nil {
+			break
+		}
+		h, ok := part.Header.(*mail.InlineHeader)
+		if !ok {
+			continue
+		}
+		body, _ := io.ReadAll(part.Body)
+		ct, _, _ := h.ContentType()
+		switch ct {
+		case "text/plain":
+			if plain == "" {
+				plain = clean(string(body))
+			}
+		case "text/html", "text/x-amp-html":
+			if htmlBody == "" {
+				htmlBody = string(body)
+			}
+		}
+	}
+	return plain, htmlBody
+}
+
+func previewFromBodies(plain, htmlBody string, maxChars int) string {
+	if maxChars <= 0 {
+		maxChars = defaultPreviewLen
+	}
+	if plain != "" {
+		return capRunes(plain, maxChars)
+	}
+	return capRunes(htmlToText(htmlBody), maxChars)
 }
 
 func extractPreview(raw []byte, maxChars int) string {

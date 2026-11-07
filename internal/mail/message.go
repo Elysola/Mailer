@@ -8,18 +8,34 @@ import (
 )
 
 type Message struct {
-	Account   string
-	UID       uint32
-	From      string
-	Subject   string
-	Date      time.Time
-	Preview   string
-	MessageID string
-	TitleTmpl string
-	TextTmpl  string
+	Account       string
+	UID           uint32
+	From          string
+	To            []string
+	Cc            []string
+	Subject       string
+	Date          time.Time
+	Preview       string
+	BodyText      string
+	HTML          string
+	Headers       map[string]string
+	MessageID     string
+	TitleTmpl     string
+	TextTmpl      string
+	TitleOverride string
+	TextOverride  string
+
+	// Fields holds structured values a WASM plugin extracted (for example a
+	// "code" from a verification mail). Templates address them as
+	// {{.Fields.code}}, so a plugin can feed a user-written template instead
+	// of hard-coding its own wording. Nil when no plugin matched.
+	Fields map[string]string
 }
 
 func (m Message) Title() string {
+	if m.TitleOverride != "" {
+		return m.TitleOverride
+	}
 	if m.TitleTmpl != "" {
 		return renderTmpl(m.TitleTmpl, m)
 	}
@@ -31,6 +47,9 @@ func (m Message) Title() string {
 }
 
 func (m Message) Text() string {
+	if m.TextOverride != "" {
+		return m.TextOverride
+	}
 	if m.TextTmpl != "" {
 		return renderTmpl(m.TextTmpl, m)
 	}

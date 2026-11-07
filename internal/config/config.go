@@ -24,6 +24,10 @@ type Config struct {
 	Telegram             Telegram         `yaml:"telegram"`
 	Discord              Discord          `yaml:"discord"`
 	MessageTemplate      *MessageTemplate `yaml:"message_template"`
+	PluginDir            string           `yaml:"plugin_dir"`
+	PluginTimeout        time.Duration    `yaml:"plugin_timeout"`
+	PluginMaxInput       int              `yaml:"plugin_max_input"`
+	PluginMaxOutput      int              `yaml:"plugin_max_output"`
 	ReadButton           bool             `yaml:"read_button"`
 }
 
@@ -137,6 +141,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MaxPendingPerAccount <= 0 {
 		c.MaxPendingPerAccount = 200
+	}
+	if c.PluginTimeout <= 0 {
+		c.PluginTimeout = 100 * time.Millisecond
+	}
+	if c.PluginMaxInput <= 0 {
+		c.PluginMaxInput = 512 * 1024
+	}
+	if c.PluginMaxOutput <= 0 {
+		c.PluginMaxOutput = 16 * 1024
 	}
 	for i := range c.Accounts {
 		a := &c.Accounts[i]
