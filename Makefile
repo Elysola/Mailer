@@ -18,7 +18,7 @@ LDFLAGS := -s -w \
 	-X main.commit=$(COMMIT) \
 	-X main.date=$(DATE)
 
-.PHONY: all build test plugins clean-plugins release-check
+.PHONY: all build test plugins clean-plugins docs docs-install release-check
 
 all: build
 
@@ -48,3 +48,12 @@ clean-plugins:
 release-check:
 	goreleaser check
 	COSIGN_SKIP=1 goreleaser build --snapshot --clean
+
+# Documentation site. /privacy and /terms are the public pages required for OAuth
+# consent-screen verification, so a broken build there is a release blocker
+# rather than a cosmetic defect; CI builds them on every push.
+docs-install:
+	cd docs && npm ci
+
+docs:
+	cd docs && npm run build

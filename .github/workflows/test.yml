@@ -113,3 +113,40 @@ jobs:
           name: wasm-plugins
           path: plugins/**/*.wasm
           if-no-files-found: error
+
+  # /privacy and /terms are the public pages Google requires before an OAuth
+  # consent screen can be published. A broken build there silently takes the
+  # verification URL offline, so treat it as a release blocker and check that
+  # the routes actually render rather than trusting the exit status alone.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install dependencies
+        run: make docs-install
+
+      - name: Build documentation
+        run: make docs
+
+      - name: Check the legal pages rendered
+        run: |
+          for page in privacy terms; do
+            file="./docs/.vitepress/dist/$page.html"
+            [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
+          done
+
+      - name: Upload site
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: docs/.vitepress/dist
+          if-no-files-found: error
