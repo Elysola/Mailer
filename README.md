@@ -691,6 +691,26 @@ password: ${IMAP_PASSWORD}
 The same applies to `bot_token` / `bot_token_file` (Telegram & Discord) and
 `webhook_url` / `webhook_url_file` (Discord).
 
+### Endpoints that carry a credential must use https
+
+Two settings are interpolated into a request URL in a way that makes the
+credential part of the URL itself:
+
+- `telegram.api_base` — the bot token is a path segment
+  (`<api_base>/bot<token>/sendMessage`);
+- `discord.webhook_url` — the webhook token *is* the URL.
+
+Both are validated as absolute `https` URLs, so a plaintext `http://` value is
+rejected at startup instead of quietly putting the token on the wire. A custom
+`api_base` is still supported for a proxy or a self-hosted Bot API server, as
+long as it is `https` and has no path or query:
+
+```yaml
+telegram:
+  api_base: "https://tg-proxy.internal:8081"   # ok
+  # api_base: "http://tg-proxy.internal:8081"  # rejected: would leak the token
+```
+
 ## Gmail over OAuth2 (XOAUTH2)
 
 Google switched off "less secure app" password login, so a Gmail account needs

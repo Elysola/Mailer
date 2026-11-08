@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -343,6 +344,9 @@ func (c *Config) validate() error {
 		if c.Telegram.BotToken == "" {
 			return fmt.Errorf("telegram enabled but bot_token is empty")
 		}
+		if err := validateAPIBase(c.Telegram.APIBase); err != nil {
+			return err
+		}
 		if len(c.Telegram.ChatIDs) == 0 {
 			return fmt.Errorf("telegram enabled but no chat_ids configured")
 		}
@@ -358,15 +362,54 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// validateAPIBase rejects a Telegram API base that would leak the bot token.
+//
+// The token is interpolated into the URL path (`/bot<token>/sendMessage`), so
+// a custom api_base (a proxy or a local Bot API server) is fine — but a plain
+// http scheme would put the credential on the wire in clear text, and a base
+// with a path or query would silently mangle every request URL. Allow only an
+// absolute https URL with no path beyond "/".
+func validateAPIBase(raw string) error {
+	if raw == "" {
+		return nil // the default is filled in earlier and is always https
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("telegram.api_base %q is not a valid URL: %w", raw, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("telegram.api_base must use https (got %q): the bot token is sent in the request path", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("telegram.api_base %q has no host", raw)
+	}
+	if p := strings.Trim(u.Path, "/"); p != "" {
+		return fmt.Errorf("telegram.api_base %q must not have a path (got %q)", raw, u.Path)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("telegram.api_base %q must not have a query or fragment", raw)
+	}
+	return nil
+}
+
 // validateDiscordRouting ensures every account can resolve a Discord
 // destination (either a global default or a per-account override).
 func (c *Config) validateDiscordRouting() error {
 	globalWebhook := c.Discord.WebhookURL != ""
 	globalChannel := c.Discord.ChannelID != ""
 
+	// A webhook URL embeds its own credential in the path, so an http one
+	// would put it on the wire in clear text. Check every URL we might use.
+	if err := validateWebhookURL("discord.webhook_url", c.Discord.WebhookURL); err != nil {
+		return err
+	}
+
 	for _, a := range c.Accounts {
 		ad := a.Discord
 		if ad != nil {
+			if err := validateWebhookURL(fmt.Sprintf("account %q: discord.webhook_url", a.Name), ad.WebhookURL); err != nil {
+				return err
+			}
 			switch ad.Mode {
 			case DiscordModeChannel, DiscordModeThread:
 			default:
@@ -385,6 +428,28 @@ func (c *Config) validateDiscordRouting() error {
 		if !globalWebhook && !globalChannel {
 			return fmt.Errorf("account %q: no discord destination (set a global webhook_url/channel_id or a per-account discord route)", a.Name)
 		}
+	}
+	return nil
+}
+
+// validateWebhookURL rejects a Discord webhook that cannot be used safely.
+//
+// The URL itself is the credential (the token is a path segment), so it must
+// be an absolute https URL. An empty value means "not configured here", which
+// the routing checks handle.
+func validateWebhookURL(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s is not a valid URL: %w", field, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("%s must use https (got %q): the webhook URL is the credential", field, u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s %q has no host", field, raw)
 	}
 	return nil
 }

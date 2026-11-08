@@ -305,3 +305,86 @@ telegram:
 		t.Fatal("expected error for implicit duplicate names")
 	}
 }
+
+// TestTelegramAPIBaseMustBeSafeHTTPS: the bot token is interpolated into the
+// request path, so a plaintext or malformed api_base would leak it or produce
+// broken URLs. A proxy over https must still be allowed.
+func TestTelegramAPIBaseMustBeSafeHTTPS(t *testing.T) {
+	base := `
+accounts:
+  - name: a
+    host: h
+    username: u
+    password: p
+telegram:
+  enabled: true
+  bot_token: "1:abc"
+  chat_ids: ["42"]
+`
+
+	rejected := map[string]string{
+		"http scheme":  "http://api.telegram.org",
+		"empty scheme": "api.telegram.org",
+		"path":         "https://api.telegram.org/bot",
+		"query":        "https://api.telegram.org?x=1",
+	}
+	for name, apiBase := range rejected {
+		t.Run(name, func(t *testing.T) {
+			path := writeTemp(t, base+`  api_base: "`+apiBase+`"`+"\n")
+			if _, err := Load(path); err == nil {
+				t.Fatalf("expected api_base %q to be rejected", apiBase)
+			}
+		})
+	}
+
+	// A local Bot API server or proxy over https is a legitimate setup.
+	path := writeTemp(t, base+`  api_base: "https://tg-proxy.internal:8081"`+"\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("https proxy base should be accepted: %v", err)
+	}
+
+	// Trailing slash is fine: the notifier trims it.
+	path = writeTemp(t, base+`  api_base: "https://api.telegram.org/"`+"\n")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("trailing slash should be accepted: %v", err)
+	}
+}
+
+// TestDiscordWebhookMustBeHTTPS: the webhook URL is itself the credential.
+func TestDiscordWebhookMustBeHTTPS(t *testing.T) {
+	base := `
+accounts:
+  - name: a
+    host: h
+    username: u
+    password: p
+discord:
+  enabled: true
+`
+	if _, err := Load(writeTemp(t, base+`  webhook_url: "http://discord.com/api/webhooks/1/x"`+"\n")); err == nil {
+		t.Fatal("expected an http webhook_url to be rejected")
+	}
+
+	// The same rule applies to a per-account override, which bypasses the
+	// global value entirely.
+	perAccount := `
+accounts:
+  - name: a
+    host: h
+    username: u
+    password: p
+    discord:
+      mode: channel
+      webhook_url: "http://discord.com/api/webhooks/1/x"
+discord:
+  enabled: true
+  bot_token: "b"
+`
+	if _, err := Load(writeTemp(t, perAccount)); err == nil {
+		t.Fatal("expected a per-account http webhook_url to be rejected")
+	}
+
+	if _, err := Load(writeTemp(t, base+`  webhook_url: "https://discord.com/api/webhooks/1/x"`+"\n")); err != nil {
+		t.Fatalf("https webhook should be accepted: %v", err)
+	}
+}

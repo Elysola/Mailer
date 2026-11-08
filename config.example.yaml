@@ -104,7 +104,8 @@ telegram:
   # bot_token_file: /run/secrets/telegram_token
   chat_ids:
     - "123456789"
-  # api_base: "https://api.telegram.org"   # override for a proxy if needed
+  # api_base: "https://api.telegram.org"   # https only: the bot token rides in
+  #                                       # the URL path, so http is rejected
 
 # Discord push. Use EITHER a webhook_url (simplest) OR bot_token + channel_id.
 discord:

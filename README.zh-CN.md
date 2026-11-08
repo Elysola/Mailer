@@ -624,6 +624,24 @@ password: ${IMAP_PASSWORD}
 `bot_token` / `bot_token_file`（Telegram 和 Discord）以及 `webhook_url` /
 `webhook_url_file`（Discord）同样适用。
 
+### 携带凭证的端点必须使用 https
+
+有两个配置项会被拼进请求 URL，凭证本身就是 URL 的一部分：
+
+- `telegram.api_base` — bot token 是路径片段
+  （`<api_base>/bot<token>/sendMessage`）；
+- `discord.webhook_url` — webhook token **就是**整个 URL。
+
+两者都会校验必须是绝对的 `https` URL，因此配成明文的 `http://` 会在启动
+时直接报错，而不是把 token 悄悄发到线上。自定义 `api_base`（代理或自建
+Bot API 服务器）依然支持，只要它是 `https` 且不带路径或查询串：
+
+```yaml
+telegram:
+  api_base: "https://tg-proxy.internal:8081"   # ok
+  # api_base: "http://tg-proxy.internal:8081"  # 会被拒绝：会泄露 token
+```
+
 ## Gmail 使用 OAuth2（XOAUTH2）
 
 Google 已停止“不够安全的应用”密码登录，Gmail 账号现在要么用应用专用密码（需开
