@@ -720,6 +720,17 @@ access token 会自动刷新并缓存在内存中；refresh token 绝不会被�
 告警，并在 `/status` 中置 `auth_failed`，之后安静地持续重试。重新运行
 `mailer auth gmail` 并替换 token 文件即可恢复。
 
+在把 token 交给服务器之前，会先检查它的授权范围（scope）。Google 每次刷新都会返回
+实际授予的 scope，守护进程现在记录这个返回值，而不是信任 token 文件里的旧副本。
+如果该授权已不包含 `https://mail.google.com/`，启动与轮询会直接报出同时点名两个
+scope 的错误，而不是一个看不懂的 `AUTHENTICATE` 拒绝——用更窄范围授权换来的 token
+可以刷新，但永远开不了 IMAP 会话。
+
+反过来，如果是**邮件服务器**拒绝了一个格式无误的 token，这个错误**不会**被当作
+凭证已死：同样的症状还会来自 token 是为别的邮箱签发的、Cloud 项目未启用 Gmail API、
+Workspace 管理员关闭了 IMAP，或 token 里的邮箱与 `username` 不一致。这些情况让你去
+跑 `mailer auth gmail` 毫无用处，所以守护进程会继续重试，并告诉你该检查哪几项。
+
 部署前需要知道两个限制：
 
 - **「测试」状态的同意屏幕会让 refresh token 7 天后过期。** 只要 OAuth 同意屏幕

@@ -6,6 +6,13 @@ state.db-wal
 data/
 .aider*
 
+# Credentials from `mailer auth gmail`. A refresh token is a password: the file
+# is portable between machines and never auto-expires on its own, so the default
+# output names must not be committable by accident. Narrower than a blanket
+# secrets rule on purpose -- tests and fixtures still need to be addable.
+gmail_token.json
+gmail_client_secret
+
 # GoReleaser work directory (release-check / local snapshot builds).
 dist/
 

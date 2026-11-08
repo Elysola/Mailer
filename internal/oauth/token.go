@@ -66,6 +66,17 @@ func IsAuthError(err error) bool {
 	return errors.As(err, &ae)
 }
 
+// NewAuthError builds an authError for failures detected outside this package.
+//
+// A grant that is technically refreshable but unusable -- a token minted for a
+// narrower scope than the protocol needs, say -- belongs in the same class as
+// invalid_grant: retrying is pointless and a human has to re-authorise. Sharing
+// the type keeps such failures on the existing alert path instead of logging
+// them as transient trouble.
+func NewAuthError(code, description string) error {
+	return &authError{Code: code, Desc: description}
+}
+
 // permanentCodes are the token-endpoint error codes that indicate a dead or
 // misconfigured credential rather than a transient failure.
 var permanentCodes = map[string]bool{

@@ -3,6 +3,8 @@ package mail
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +56,9 @@ func TokenFor(ctx context.Context, acc *config.Account) (string, error) {
 	}
 
 	if tok.Valid(time.Now()) {
+		if err := checkGrantedScope(acc, tok.Scope); err != nil {
+			return "", err
+		}
 		tokenCache.Store(path, tok)
 		return tok.AccessToken, nil
 	}
@@ -69,20 +74,90 @@ func TokenFor(ctx context.Context, acc *config.Account) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("account %q: refresh access token: %w", acc.Name, err)
 	}
-	// Preserve the field the refresh grant does not echo back.
+	if refreshed.RefreshToken == "" {
+		refreshed.RefreshToken = tok.RefreshToken
+	}
+
+	// Preserve the fields the refresh grant does not echo back. Scope is not one
+	// of them: Google returns the scope actually granted on every refresh, and
+	// copying the file's value over it would hide a token that no longer
+	// carries the IMAP scope -- exactly the case that turns into an
+	// unexplained IMAP authentication failure.
 	refreshed.Account = tok.Account
-	refreshed.Scope = tok.Scope
+	if refreshed.Scope == "" {
+		refreshed.Scope = tok.Scope
+	}
 	if refreshed.TokenURL == "" {
 		refreshed.TokenURL = tok.TokenURL
 	}
+	if refreshed.Expiry.IsZero() {
+		// No expires_in: the endpoint did not tell us. Adopt the old expiry so
+		// the token is not treated as valid forever and never refreshed again.
+		refreshed.Expiry = tok.Expiry
+	}
 
-	// Persisting the refreshed access token is an optimisation, not a
-	// requirement: failing to write it must not break a poll. The refresh
-	// token itself is unchanged, so nothing is lost.
-	_ = oauth.SaveToken(path, refreshed)
+	if err := checkGrantedScope(acc, refreshed.Scope); err != nil {
+		return "", err
+	}
+
+	// The refresh token is unchanged, so a failed write costs only a refresh
+	// round trip after a restart. It still deserves a warning: it was silent
+	// before, and a token file that never changes on disk is alarming when
+	// someone is trying to work out why authentication fails.
+	if err := oauth.SaveToken(path, refreshed); err != nil {
+		log.Printf("account %q: could not persist the refreshed access token (continuing with the in-memory copy): %v", acc.Name, err)
+	}
 
 	tokenCache.Store(path, refreshed)
 	return refreshed.AccessToken, nil
+}
+
+// checkGrantedScope rejects a credential whose granted scope cannot satisfy
+// IMAP, before the token is ever handed to the server.
+//
+// Gmail answers an out-of-scope token with a bare
+// {"status":"400","schemes":"Bearer","scope":"..."} challenge, which reads
+// like a server problem and sends people looking at the wrong thing. Comparing
+// the recorded grant against the requested one turns that into a single
+// actionable message. A token file with no recorded scope cannot be checked and
+// is left alone, since older and hand-written files legitimately omit it.
+func checkGrantedScope(acc *config.Account, granted string) error {
+	if acc == nil || acc.OAuth2 == nil || granted == "" {
+		return nil
+	}
+	want := acc.OAuth2.ScopeOrDefault()
+	if scopeCovers(granted, want) {
+		return nil
+	}
+	return oauth.NewAuthError(
+		"invalid_scope",
+		fmt.Sprintf(
+			"account %q: the stored token grants %q but IMAP requires %q, so the mail server will reject it; re-run `mailer auth gmail` and approve the requested scope",
+			acc.Name, granted, want,
+		),
+	)
+}
+
+// scopeCovers reports whether the space-separated granted scope contains every
+// requested scope. Google returns the full grant verbatim on refresh, so a
+// plain set comparison is enough; the server, not this function, is the
+// authority on whether a scope actually unlocks a given mailbox.
+//
+// Comparison ignores a trailing slash. The two spellings are equivalent to
+// Google, and a false negative here would refuse a working credential and send
+// the operator to re-authorise for no reason, which is worse than the vague
+// server error this check replaces.
+func scopeCovers(granted, want string) bool {
+	have := make(map[string]struct{})
+	for _, s := range strings.Fields(granted) {
+		have[strings.TrimSuffix(s, "/")] = struct{}{}
+	}
+	for _, s := range strings.Fields(want) {
+		if _, ok := have[strings.TrimSuffix(s, "/")]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ResetTokenCache drops the cached access token for an account. Used when a
@@ -111,7 +186,12 @@ func invalidateCachedAccessToken(path string) {
 	}
 	tok.AccessToken = ""
 	tok.Expiry = time.Time{}
-	_ = oauth.SaveToken(path, tok)
+	if err := oauth.SaveToken(path, tok); err != nil {
+		// Worth saying out loud: the documented promise is that the next
+		// attempt refreshes, and that stops being true if the file still holds
+		// a stale-but-unexpired token.
+		log.Printf("could not invalidate the persisted access token in %s: %v", path, err)
+	}
 }
 
 func accountName(acc *config.Account) string {

@@ -235,3 +235,152 @@ func TestTokenForWithoutOAuth2(t *testing.T) {
 }
 
 // contains is a tiny helper to keep error assertions readable.
+func TestTokenForChecksGrantedScopeFromTheFile(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScopedTokenFile(t, dir, "https://www.googleapis.com/auth/gmail.readonly",
+		time.Now().Add(time.Hour))
+
+	acc := scopedAccount(path, "https://mail.google.com/")
+
+	_, err := TokenFor(context.Background(), acc)
+	if err == nil {
+		t.Fatal("expected a scope error")
+	}
+	if !strings.Contains(err.Error(), "gmail.readonly") ||
+		!strings.Contains(err.Error(), "https://mail.google.com/") {
+		t.Errorf("error should name both scopes, got: %v", err)
+	}
+	// A grant that cannot work is not transient: alert instead of retrying.
+	if !oauth.IsAuthError(err) {
+		t.Errorf("IsAuthError = false, want true; err = %v", err)
+	}
+}
+
+// The refreshed grant, not the file's stale copy, is what counts. Before this
+// was fixed the file's scope was copied over the response, so a token that had
+// silently lost the IMAP scope still looked correct on disk.
+func TestTokenForUsesRefreshedScopeNotTheFilesCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScopedTokenFile(t, dir, "https://mail.google.com/", time.Now().Add(-time.Hour))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"fresh","expires_in":3600,` +
+			`"scope":"https://www.googleapis.com/auth/userinfo.email"}`))
+	}))
+	defer srv.Close()
+
+	acc := scopedAccount(path, "https://mail.google.com/")
+	acc.OAuth2.TokenURL = srv.URL
+
+	_, err := TokenFor(context.Background(), acc)
+	if err == nil {
+		t.Fatal("expected the narrowed grant to be rejected")
+	}
+	if !strings.Contains(err.Error(), "userinfo.email") {
+		t.Errorf("error should quote the grant the server returned, got: %v", err)
+	}
+}
+
+func TestTokenForAcceptsMatchingScope(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScopedTokenFile(t, dir, "https://mail.google.com/", time.Now().Add(time.Hour))
+
+	if _, err := TokenFor(context.Background(), scopedAccount(path, "https://mail.google.com/")); err != nil {
+		t.Fatalf("TokenFor: %v", err)
+	}
+}
+
+// Older and hand-written token files may not record a scope at all. They must
+// be given the benefit of the doubt: the server is the final authority.
+func TestTokenForToleratesTokenFileWithoutScope(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScopedTokenFile(t, dir, "", time.Now().Add(time.Hour))
+
+	if _, err := TokenFor(context.Background(), scopedAccount(path, "https://mail.google.com/")); err != nil {
+		t.Fatalf("TokenFor: %v", err)
+	}
+}
+
+func TestScopeCovers(t *testing.T) {
+	tests := []struct {
+		name    string
+		granted string
+		want    string
+		ok      bool
+	}{
+		{name: "exact", granted: "https://mail.google.com/", want: "https://mail.google.com/", ok: true},
+		{name: "extra scopes tolerated", granted: "a b", want: "a", ok: true},
+		{name: "subset rejected", granted: "a", want: "a b", ok: false},
+		{name: "empty grant rejected", granted: "", want: "a", ok: false},
+		{name: "empty want always covers", granted: "a", want: "", ok: true},
+		// The two spellings are equivalent to Google; refusing them would ask
+		// for a pointless re-authorisation.
+		{name: "trailing slash ignored in grant", granted: "https://mail.google.com", want: "https://mail.google.com/", ok: true},
+		{name: "trailing slash ignored in want", granted: "https://mail.google.com/", want: "https://mail.google.com", ok: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scopeCovers(tc.granted, tc.want); got != tc.ok {
+				t.Errorf("scopeCovers(%q, %q) = %v, want %v", tc.granted, tc.want, got, tc.ok)
+			}
+		})
+	}
+}
+
+// A refresh response without expires_in must not leave the token looking valid
+// forever, which would mean it is never refreshed again.
+func TestTokenForKeepsExpiryWhenRefreshOmitsIt(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScopedTokenFile(t, dir, "https://mail.google.com/", time.Now().Add(-time.Hour))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"fresh","scope":"https://mail.google.com/"}`))
+	}))
+	defer srv.Close()
+
+	acc := scopedAccount(path, "https://mail.google.com/")
+	acc.OAuth2.TokenURL = srv.URL
+
+	if _, err := TokenFor(context.Background(), acc); err != nil {
+		t.Fatalf("TokenFor: %v", err)
+	}
+	saved, err := oauth.LoadToken(path)
+	if err != nil {
+		t.Fatalf("LoadToken: %v", err)
+	}
+	if saved.Expiry.IsZero() {
+		t.Error("expiry must not be cleared when the endpoint omits expires_in")
+	}
+}
+
+func writeScopedTokenFile(t *testing.T, dir, scope string, expiry time.Time) string {
+	t.Helper()
+	path := filepath.Join(dir, "token.json")
+	tok := &oauth.Token{
+		Account:      "me@example.com",
+		ClientID:     "cid",
+		RefreshToken: "1//rt",
+		AccessToken:  "cached-access",
+		Expiry:       expiry,
+		Scope:        scope,
+	}
+	if err := oauth.SaveToken(path, tok); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+	return path
+}
+
+func scopedAccount(path, scope string) *config.Account {
+	return &config.Account{
+		Name: "me",
+		OAuth2: &config.AccountOAuth2{
+			ClientID:     "cid",
+			ClientSecret: "secret",
+			TokenFile:    path,
+			TokenURL:     "http://127.0.0.1:1/unreachable",
+			Scope:        scope,
+		},
+	}
+}

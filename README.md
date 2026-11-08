@@ -795,6 +795,20 @@ the daemon sends **one** alert to the account's notifiers and sets
 `auth_failed` in `/status`, then keeps retrying quietly. Re-run
 `mailer auth gmail` and redeploy the token file to recover.
 
+The grant's scope is checked before the token is used. Google reports the scope
+actually granted on every refresh, and the daemon now records that value instead
+of trusting the copy in the token file. If the grant no longer covers
+`https://mail.google.com/`, startup and polls fail with a message naming both
+scopes rather than an opaque `AUTHENTICATE` rejection — a token minted through a
+narrower consent is refreshable but can never open an IMAP session.
+
+If the *mail server* rejects an otherwise well-formed token, the error is
+deliberately **not** treated as a dead credential: the same symptom comes from
+a token issued for a different mailbox, a Cloud project with the Gmail API
+disabled, an account whose Workspace admin blocked IMAP, or a token whose
+Mailbox address differs from `username`. Those send you to `mailer auth gmail`
+for nothing, so the daemon keeps retrying and says which checks to run instead.
+
 Two constraints worth knowing before you deploy:
 
 - **Testing-mode consent screens expire refresh tokens after 7 days.** While the
