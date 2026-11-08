@@ -18,10 +18,17 @@ func TestXOAUTH2Start(t *testing.T) {
 		t.Errorf("mechanism = %q, want XOAUTH2", mech)
 	}
 
-	// Google's exact wire format. The separators are SOH (0x01), and the
-	// credentials are NOT base64 encoded by the client: go-imap encodes the
-	// initial response when it writes the AUTHENTICATE command.
-	want := "me@example.com\x01auth=Bearer ya29.token\x01\x01"
+	// Google's exact wire format, taken from the protocol documentation rather
+	// than from our own implementation. The separators are SOH (0x01), the
+	// `user=` prefix is mandatory, and the credentials are NOT base64 encoded by
+	// the client: go-imap encodes the initial response when it writes the
+	// AUTHENTICATE command.
+	//
+	// Deriving this expectation from Start's output is what let the original
+	// missing prefix ship: implementation and assertion shared the same bug and
+	// the suite stayed green while every real login was rejected with an opaque
+	// {"status":"400"} challenge.
+	want := "user=me@example.com\x01auth=Bearer ya29.token\x01\x01"
 	if string(resp) != want {
 		t.Errorf("initial response = %q, want %q", resp, want)
 	}
@@ -64,5 +71,15 @@ func TestXOAUTH2EmptyChallenge(t *testing.T) {
 	c := NewXOAUTH2Client("me@example.com", "ya29.token")
 	if _, err := c.Next(nil); err == nil {
 		t.Fatal("expected an error on an empty challenge")
+	}
+}
+
+// A username containing the SOH separator would let a crafted account name
+// inject extra SASL fields. Google's format has no escaping, so the only safe
+// answer is to refuse the value.
+func TestXOAUTH2RejectsInjectedSeparator(t *testing.T) {
+	c := NewXOAUTH2Client("me@example.com\x01auth=Bearer stolen", "ya29.token")
+	if _, _, err := c.Start(); err == nil {
+		t.Fatal("expected an error for a username containing 0x01")
 	}
 }

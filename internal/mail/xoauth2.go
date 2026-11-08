@@ -3,6 +3,7 @@ package mail
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/emersion/go-sasl"
 )
@@ -28,7 +29,17 @@ func NewXOAUTH2Client(username, accessToken string) sasl.Client {
 }
 
 func (a *xoauth2Client) Start() (string, []byte, error) {
-	return xoauth2, []byte(a.username + "\x01auth=Bearer " + a.token + "\x01\x01"), nil
+	// The format has no escaping, so a 0x01 inside either field would let the
+	// value inject extra SASL fields (a second auth=Bearer, say). Nothing
+	// legitimate contains it, so refusing is strictly safer than sending it.
+	if strings.ContainsAny(a.username, "\x01\x00") || strings.ContainsAny(a.token, "\x01\x00") {
+		return "", nil, errors.New("xoauth2: username or token contains a control character")
+	}
+	// The `user=` prefix is part of the documented message, not decoration.
+	// Leaving it out makes Gmail answer with a bare
+	// {"status":"400",...} challenge that names nothing, so the failure looks
+	// like a bad token rather than a malformed message.
+	return xoauth2, []byte("user=" + a.username + "\x01auth=Bearer " + a.token + "\x01\x01"), nil
 }
 
 // Next handles the server's error challenge. Per Google's spec the server
