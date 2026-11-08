@@ -411,6 +411,92 @@ func (s *Store) PendingCount(account string) (int, error) {
 	return n, nil
 }
 
+// PendingRows lists queued notifications regardless of their next attempt time,
+// oldest first. It exists for the `mailer queue` subcommand: the daemon only ever
+// asks for rows that are due, so it never needs this view.
+func (s *Store) PendingRows(account string, limit int) ([]Pending, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`
+SELECT account, uid, message_id, sender, subject, date_unix, preview, failed,
+       title_override, text_override, fields, attachments, attempts,
+       next_try_unix, created_unix
+FROM pending_notifications
+WHERE account = ?
+ORDER BY created_unix, uid LIMIT ?`,
+		account, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending: %w", err)
+	}
+	defer rows.Close()
+	return scanPendingRows(rows)
+}
+
+// AllPendingRows is PendingRows across every account.
+func (s *Store) AllPendingRows(limit int) ([]Pending, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`
+SELECT account, uid, message_id, sender, subject, date_unix, preview, failed,
+       title_override, text_override, fields, attachments, attempts,
+       next_try_unix, created_unix
+FROM pending_notifications
+ORDER BY created_unix, uid LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending: %w", err)
+	}
+	defer rows.Close()
+	return scanPendingRows(rows)
+}
+
+// DeletePendingForAccount drops every queued row of one account and reports how
+// many were removed. `mailer queue drop` uses it to clear a poisoned queue.
+func (s *Store) DeletePendingForAccount(account string) (int, error) {
+	res, err := s.db.Exec(`DELETE FROM pending_notifications WHERE account = ?`, account)
+	if err != nil {
+		return 0, fmt.Errorf("delete pending: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil // the delete succeeded; the count is a nicety
+	}
+	return int(n), nil
+}
+
+// SeenCount reports how many Message-ID records are kept for one account.
+func (s *Store) SeenCount(account string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM seen_messages WHERE account = ?`, account).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count seen: %w", err)
+	}
+	return n, nil
+}
+
+func scanPendingRows(rows *sql.Rows) ([]Pending, error) {
+	var out []Pending
+	for rows.Next() {
+		var p Pending
+		var dateUnix, nextTry, created int64
+		var failed, fieldsJSON, attachmentsJSON string
+		if err := rows.Scan(&p.Account, &p.UID, &p.MessageID, &p.From, &p.Subject,
+			&dateUnix, &p.Preview, &failed, &p.TitleOverride, &p.TextOverride, &fieldsJSON,
+			&attachmentsJSON, &p.Attempts, &nextTry, &created); err != nil {
+			return nil, fmt.Errorf("scan pending: %w", err)
+		}
+		p.Date = time.Unix(dateUnix, 0)
+		p.NextTry = time.Unix(nextTry, 0)
+		p.Created = time.Unix(created, 0)
+		p.Failed = splitCSV(failed)
+		p.Fields = decodeFields(fieldsJSON)
+		p.Attachments = decodeAttachments(attachmentsJSON)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // encodeFields serialises plugin-extracted fields for storage. An empty map
 // stores as the empty string so legacy rows and plugin-less rows look alike.
 func encodeFields(fields map[string]string) string {

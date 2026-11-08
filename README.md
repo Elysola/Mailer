@@ -585,6 +585,88 @@ For each account it reports:
 
 Note that this *does* send test messages to your chats/channels.
 
+## `mailer doctor` — read-only health report
+
+`doctor` inspects a deployment without touching the network and without
+sending anything. It answers "is this deployment healthy?" rather than "can I
+reach the server right now?", which is the question you actually have when
+something is wrong:
+
+```bash
+./mailer doctor -config config.yaml
+./mailer doctor -config config.yaml -json   # machine-readable
+```
+
+```console
+$ ./mailer doctor -config config.yaml
+⚠ overall: warn
+
+  ⚠ health server disabled (health_port: 0) — no /health, /status or /metrics
+  ⚠ [primary] 2 notification(s) queued, oldest 4m
+
+  · config config.yaml loaded: 1 account(s)
+  · notifier telegram: enabled
+  · poll interval: 5m0s
+  · state file: ./state.db
+
+ACCOUNT  MODE  LAST UID  UIDVALIDITY  PENDING  SEEN
+primary  idle  312       1            2        140
+```
+
+It checks, per account:
+
+- **progress** — whether a completed poll has been recorded at all, and the
+  stored `LastUID` / `UIDVALIDITY`;
+- **queue depth** — how many notifications are waiting and how old the oldest
+  is, plus a hard error when a queued row has no notifier left to try (that
+  row can never be delivered and only occupies a queue slot);
+- **queue cap** — whether the account has reached
+  `max_pending_per_account`, after which new failures are dropped;
+- **de-duplication** — how many `Message-ID` records are retained;
+- **notifier and health-server** configuration.
+
+The exit code is `0` for `ok` and `warn`, `1` for `error` — so `doctor` is
+safe to run from a cron/Timer check only if a queued-but-draining backlog
+should not page anyone. `warn` deliberately does not fail: a queue that is
+draining normally is not an outage.
+
+## `mailer queue` — inspect and drop the retry queue
+
+Undelivered notifications are retried from a queue in the state database.
+`queue ls` shows what is in it, which is usually the fastest answer to "why
+did I not get notified?":
+
+```bash
+./mailer queue ls -config config.yaml
+./mailer queue ls -config config.yaml -account primary -json
+```
+
+```console
+$ ./mailer queue ls -config config.yaml
+ACCOUNT  UID  ATTEMPTS  CREATED  NEXT TRY  FAILED    SUBJECT
+primary  311  3         4m       now       telegram  Your verification code
+primary  312  1         1m       in 2m     -         Invoice for October
+
+2 row(s)
+1 row(s) have no notifier left to try — they will be dropped when they age out
+```
+
+Note that the `FAILED` column lists *notifiers*, not attempts: a row whose
+attempt set has emptied out (for example because you disabled the last
+working notifier) can never succeed.
+
+`queue drop` discards queued notifications, which is not recoverable — hence
+the preview and the mandatory `-yes`:
+
+```bash
+./mailer queue drop -config config.yaml -account primary   # preview only
+./mailer queue drop -config config.yaml -account primary -yes
+./mailer queue drop -config config.yaml -all -yes
+```
+
+Passing neither `-account` nor `-all` refuses with exit code `2`, so a typo
+cannot silently destroy undelivered notifications.
+
 ## Secrets management
 
 All credential fields support two sources (evaluated in order):

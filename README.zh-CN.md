@@ -527,6 +527,80 @@ notifier discord: ✓ test message sent
 
 注意：这会**真的**向你的聊天/频道发出测试消息。
 
+## `mailer doctor` — 只读健康体检
+
+`doctor` 不访问网络、不发送任何消息，只检查部署本身是否健康。它回答的
+是“这个部署还好吗”，而不是“现在能连上服务器吗”——出问题时你真正关心的
+往往是前者：
+
+```bash
+./mailer doctor -config config.yaml
+./mailer doctor -config config.yaml -json   # 机器可读
+```
+
+```console
+$ ./mailer doctor -config config.yaml
+⚠ overall: warn
+
+  ⚠ health server disabled (health_port: 0) — no /health, /status or /metrics
+  ⚠ [primary] 2 notification(s) queued, oldest 4m
+
+  · config config.yaml loaded: 1 account(s)
+  · notifier telegram: enabled
+  · poll interval: 5m0s
+  · state file: ./state.db
+
+ACCOUNT  MODE  LAST UID  UIDVALIDITY  PENDING  SEEN
+primary  idle  312       1            2        140
+```
+
+按账号检查以下内容：
+
+- **进度** — 是否至少完成过一次轮询，以及存档的 `LastUID` / `UIDVALIDITY`；
+- **队列深度** — 等待中的通知条数与最老一条的年龄；如果某条的“待尝试通知
+  器”集合已空，会报为**错误**（这种行永远不可能成功，只会占着队列位置）；
+- **队列上限** — 是否达到 `max_pending_per_account`，达到后新失败会被丢弃；
+- **去重** — 保留了多少条 `Message-ID` 记录；
+- **通知器与健康检查服务**的配置。
+
+退出码：`ok` 与 `warn` 为 `0`，`error` 为 `1`。`warn` 故意不算失败——
+一个正在正常消化的队列不是故障。
+
+## `mailer queue` — 查看与清空重试队列
+
+未送达的通知会进入状态数据库中的队列重试。`queue ls` 展示队列内容，通常是
+“我怎么没收到通知”最快的答案：
+
+```bash
+./mailer queue ls -config config.yaml
+./mailer queue ls -config config.yaml -account primary -json
+```
+
+```console
+$ ./mailer queue ls -config config.yaml
+ACCOUNT  UID  ATTEMPTS  CREATED  NEXT TRY  FAILED    SUBJECT
+primary  311  3         4m       now       telegram  Your verification code
+primary  312  1         1m       in 2m     -         Invoice for October
+
+2 row(s)
+1 row(s) have no notifier left to try — they will be dropped when they age out
+```
+
+注意 `FAILED` 列列的是**通知器**而不是尝试次数：如果一条记录的待尝试集合已
+空（例如你把最后一个可用渠道关掉了），它就永远不可能成功。
+
+`queue drop` 会**丢弃**队列中的通知，不可恢复——所以它先预览、并且强制要求
+`-yes`：
+
+```bash
+./mailer queue drop -config config.yaml -account primary   # 仅预览
+./mailer queue drop -config config.yaml -account primary -yes
+./mailer queue drop -config config.yaml -all -yes
+```
+
+既不给 `-account` 也不给 `-all` 会以退出码 `2` 拒绝执行，避免手误把未送达的
+通知静默删掉。
+
 ## 密钥管理
 
 所有凭证字段支持两种来源（按顺序处理）：

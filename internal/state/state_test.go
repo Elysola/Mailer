@@ -380,3 +380,85 @@ func TestDecodeAttachmentsToleratesCorruptJSON(t *testing.T) {
 		t.Errorf("decodeAttachments(empty) = %v, want nil", got)
 	}
 }
+
+// TestPendingRowsAndDeleteForAccount covers the inspection helpers the
+// `mailer queue` subcommand relies on.
+func TestPendingRowsAndDeleteForAccount(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	for _, p := range []Pending{
+		{Account: "a", UID: 2, Subject: "second"},
+		{Account: "a", UID: 1, Subject: "first"},
+		{Account: "b", UID: 9, Subject: "other"},
+	} {
+		if err := s.EnqueuePending(p, now.Add(time.Hour)); err != nil {
+			t.Fatalf("EnqueuePending: %v", err)
+		}
+	}
+
+	// Unlike DuePending, PendingRows must return rows that are not due yet.
+	rows, err := s.PendingRows("a", 10)
+	if err != nil {
+		t.Fatalf("PendingRows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (not-yet-due rows must be listed)", len(rows))
+	}
+
+	all, err := s.AllPendingRows(10)
+	if err != nil {
+		t.Fatalf("AllPendingRows: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("all rows = %d, want 3", len(all))
+	}
+
+	n, err := s.DeletePendingForAccount("a")
+	if err != nil {
+		t.Fatalf("DeletePendingForAccount: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted = %d, want 2", n)
+	}
+	if got, _ := s.PendingCount("a"); got != 0 {
+		t.Errorf("pending after delete = %d, want 0", got)
+	}
+	if got, _ := s.PendingCount("b"); got != 1 {
+		t.Errorf("other account was touched: pending = %d, want 1", got)
+	}
+}
+
+func TestPendingRowsLimit(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	for uid := uint32(1); uid <= 5; uid++ {
+		if err := s.EnqueuePending(Pending{Account: "a", UID: uid}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.PendingRows("a", 2)
+	if err != nil {
+		t.Fatalf("PendingRows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("rows = %d, want the limit of 2", len(rows))
+	}
+}
+
+func TestSeenCount(t *testing.T) {
+	s := newStore(t)
+	if n, err := s.SeenCount("a"); err != nil || n != 0 {
+		t.Fatalf("SeenCount = %d, %v; want 0, nil", n, err)
+	}
+	for _, id := range []string{"<1@x>", "<2@x>"} {
+		if err := s.MarkDelivered("a", id); err != nil {
+			t.Fatalf("MarkDelivered: %v", err)
+		}
+	}
+	if n, err := s.SeenCount("a"); err != nil || n != 2 {
+		t.Errorf("SeenCount = %d, %v; want 2, nil", n, err)
+	}
+	if n, _ := s.SeenCount("b"); n != 0 {
+		t.Errorf("SeenCount for another account = %d, want 0", n)
+	}
+}

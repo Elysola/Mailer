@@ -30,6 +30,10 @@ func main() {
 			os.Exit(runPlugins(os.Args[2:]))
 		case "auth":
 			os.Exit(runAuth(os.Args[2:]))
+		case "queue":
+			os.Exit(runQueue(os.Args[2:]))
+		case "doctor":
+			os.Exit(runDoctor(os.Args[2:]))
 		case "version", "-version", "--version", "-v":
 			fmt.Println(VersionString())
 			os.Exit(0)
