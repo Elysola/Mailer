@@ -29,6 +29,14 @@ var idleMode = 20 * time.Minute
 // caller should redial with backoff instead of trusting the session.
 var ErrWatchClosed = errors.New("imap: watch connection closed")
 
+// errIdleUnsupported reports that the server does not offer IDLE at all.
+//
+// It is distinct from a broken connection because there is no point retrying:
+// every attempt will reach the same SELECT and the same conclusion. Retrying on
+// the normal backoff would still hammer the server every few seconds forever,
+// so the loop stops watching this account and leaves plain polling to cover it.
+var errIdleUnsupported = errors.New("imap: server does not advertise IDLE")
+
 // IdleWatcher holds one IDLE-capable watch connection per account and reports
 // mailbox growth.
 //
@@ -118,6 +126,13 @@ func (w *IdleWatcher) loop(ctx context.Context, acc config.Account) {
 		}
 
 		if _, err := w.session(ctx, acc); err != nil {
+			if errors.Is(err, errIdleUnsupported) {
+				// Nothing to retry: the server will answer the same way every
+				// time. Polling still covers the account, so stop here rather
+				// than reconnect on a loop and log the same line forever.
+				log.Printf("[idle:%s] IDLE unavailable; watching this account by polling only", acc.Name)
+				return
+			}
 			// Never let a broken IDLE be fatal: the poller keeps polling
 			// regardless, so we only lose latency while retrying.
 			select {
@@ -190,8 +205,7 @@ func (w *IdleWatcher) session(ctx context.Context, acc config.Account) (bool, er
 
 	caps := client.Caps()
 	if !caps.Has(imap.CapIdle) && !caps.Has(imap.CapIMAP4rev2) {
-		log.Printf("[idle:%s] server does not advertise IDLE; falling back to polling", acc.Name)
-		return true, nil
+		return true, errIdleUnsupported
 	}
 
 	sel, err := client.Select(acc.Mailbox, nil).Wait()
