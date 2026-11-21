@@ -23,8 +23,10 @@ export default defineConfig({
   lastUpdated: true,
 
   head: [
-    ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
-    ['meta', { name: 'theme-color', content: '#0b7285' }],
+    ['link', { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' }],
+    ['link', { rel: 'icon', href: '/favicon-16.png', type: 'image/png', sizes: '16x16' }],
+    ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '256x256' }],
+    ['meta', { name: 'theme-color', content: '#4E82DF' }],
   ],
 
   themeConfig: {
