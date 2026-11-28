@@ -4,24 +4,28 @@ layout: home
 hero:
   name: Mailer
   text: Self-hosted mail notifications
-  tagline: Watches your IMAP mailboxes over IDLE and forwards new mail to Telegram or Discord — with your own parsing rules and no third-party server in the middle.
+  tagline: Watches your mailboxes, runs new mail through a composable processing pipeline, and delivers notifications to Telegram, Discord, Slack, ntfy, Gotify — or anything with a webhook. No third-party server in the middle.
   actions:
     - theme: brand
       text: Get started
       link: /guide/getting-started
     - theme: alt
-      text: Gmail OAuth2 setup
-      link: /guide/gmail-oauth2
+      text: 中文文档
+      link: /zh/
 
 features:
   - title: Runs on your own machine
     details: A single static binary. Your mailbox credentials and message contents stay on the host you control; there is no hosted service operated by this project.
   - title: Instant delivery over IMAP IDLE
-    details: Connects with IDLE so new mail is forwarded as it arrives, rather than on a polling interval.
-  - title: Pluggable parsing
-    details: Extract one-time codes or specific fields with host-side regular expressions, or with sandboxed WebAssembly plugins that have no file, network, or environment access.
+    details: Connects with IDLE so new mail is forwarded as it arrives, with automatic fallback to polling. Local maildirs are supported too — postfix, fetchmail and getmail all become notification sources.
+  - title: A composable pipeline
+    details: Regex extraction, field tagging, templating, repeat throttling, WASM plugins, external commands and LLM stages all implement one interface and interleave freely.
+  - title: Deliver anywhere
+    details: Telegram and Discord with interactive mark-read buttons, plus Slack, ntfy, Gotify and a generic webhook for everything else — multiple instances of each, routed by rule.
+  - title: AI optional, not required
+    details: OpenAI-compatible LLMs can classify, summarize and extract — gated by zero-cost selectors so tokens are only spent on mail that matters. Local models through Ollama work too.
   - title: No duplicate notifications
-    details: Message-ID deduplication and a persistent retry queue survive restarts, so nothing is announced twice and nothing is silently dropped.
+    details: Message-ID deduplication, repeat throttling and a persistent retry queue survive restarts, so nothing is announced twice and nothing is silently dropped.
 ---
 
 ## What this site is

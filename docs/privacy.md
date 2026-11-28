@@ -11,8 +11,8 @@ control you have over it.
 Mailer is **self-hosted software**, not a hosted service. The project does not
 operate any server that receives, stores, or processes your mail. You deploy the
 Software on a machine you control, and your data stays there — except for the
-notification content you explicitly configure it to deliver to Telegram or
-Discord.
+notification content you explicitly configure it to deliver to a chat platform,
+and any AI processing you explicitly configure.
 
 There is no account to create with us, no telemetry, and no analytics.
 
@@ -55,11 +55,26 @@ the destination you configured:
 
 - **Telegram**, via `https://api.telegram.org`
 - **Discord**, via `https://discord.com/api/v10/...`
+- **Slack**, via the incoming-webhook URL you configure
+- **ntfy** or **Gotify**, via the server URL you configure — self-hostable,
+  in which case nothing leaves your infrastructure
+- **any HTTP endpoint**, via the generic webhook notifier
 
-Those messages then travel through and are stored by Telegram or Discord, under
-their respective privacy policies. **Choosing a destination is the act that
-discloses data to a third party.** If the content of your mail is sensitive,
-choose the destination accordingly, or run the Software without a notifier.
+Those messages then travel through and are stored by the platform you chose,
+under its privacy policy. **Choosing a destination is the act that discloses
+data to a third party.** If the content of your mail is sensitive, choose the
+destination accordingly — self-hosted ntfy or Gotify keeps notifications inside
+your own infrastructure — or run the Software without a notifier.
+
+### Optional AI processing
+
+If you configure an `llm*` processor, message content is sent to the LLM API
+endpoint you configure — an OpenAI-compatible provider such as DeepSeek, or a
+local model through Ollama. This happens **only** for messages matching the
+processor's `when` selector, and only when you have explicitly configured both
+the LLM instance and the processor. With a local model, nothing leaves your
+host; with a hosted provider, the provider's data policies apply to what you
+send. The Software itself adds no AI processing unless you configure it.
 
 ### Google user data
 
@@ -86,7 +101,7 @@ including the Limited Use requirements.
 - It does not contain analytics or advertising code.
 - It does not read mailboxes or files other than those you configure.
 - It does not share data with the Mailer project or any party other than the
-  notification destination you configure.
+  notification destinations you configure and the LLM endpoints you configure.
 - WebAssembly plugins run sandboxed, with no network, filesystem, or environment
   access. A plugin receives the message and returns extracted fields; it cannot
   exfiltrate anything.

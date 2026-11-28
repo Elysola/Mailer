@@ -83,8 +83,9 @@ on the server.
 Replace `password` with an `oauth2` block:
 
 ```yaml
-accounts:
+sources:
   - name: gmail
+    type: imap
     host: imap.gmail.com
     port: 993
     username: me@gmail.com
