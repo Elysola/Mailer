@@ -9,7 +9,6 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-
 )
 
 // idleMode caps how long a single IDLE sits before the connection is cycled.

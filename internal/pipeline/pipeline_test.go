@@ -119,9 +119,9 @@ func newHarness(t *testing.T, mutate func(*Deps)) *harness {
 	src := newFakeSource("test-src")
 	nt := &fakeNotifier{name: "nt"}
 	deps := Deps{
-		Store:    st,
-		Metrics:  metricsx.NewMetrics(),
-		Routes:   []Route{{Notifiers: []string{"nt"}}},
+		Store:     st,
+		Metrics:   metricsx.NewMetrics(),
+		Routes:    []Route{{Notifiers: []string{"nt"}}},
 		Commander: func(context.Context, string, core.Command) error { return nil },
 		Notifiers: map[string]core.Notifier{"nt": nt},
 	}

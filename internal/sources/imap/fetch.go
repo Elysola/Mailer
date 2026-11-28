@@ -408,7 +408,6 @@ func previewFromBodies(plain, htmlBody string, maxChars int) string {
 	return capRunes(htmlToText(htmlBody), maxChars)
 }
 
-
 // capRunes truncates s to at most max runes, appending an ellipsis when cut,
 // and trims trailing whitespace introduced by the cut.
 func capRunes(s string, max int) string {

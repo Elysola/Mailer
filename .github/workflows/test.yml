@@ -95,11 +95,11 @@ jobs:
       # A plugin that compiles can still fail to load: bad manifest, missing
       # entrypoint, invalid regex, unsupported api_version.
       - name: Validate plugin manifests and entrypoints
-        run: go run . plugins validate --dir ./plugins
+        run: go run ./cmd/mailer plugins validate --dir ./plugins
 
       - name: Smoke-test the otp plugin
         run: |
-          out=$(go run . plugins test --dir ./plugins \
+          out=$(go run ./cmd/mailer plugins test --dir ./plugins \
             --input ./plugins/sample-mail.json)
           echo "$out"
           echo "$out" | grep -q '"code": "690831"' || {

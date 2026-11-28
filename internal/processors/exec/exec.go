@@ -57,8 +57,8 @@ func New(name string, raw map[string]any, deps component.Deps) (core.Processor, 
 	return &Processor{name: name, cfg: cfg}, nil
 }
 
-func (p *Processor) Name() string { return p.name }
-func (p *Processor) Type() string { return "exec" }
+func (p *Processor) Name() string                    { return p.name }
+func (p *Processor) Type() string                    { return "exec" }
 func (p *Processor) Start(ctx context.Context) error { return nil }
 func (p *Processor) Stop(ctx context.Context) error  { return nil }
 

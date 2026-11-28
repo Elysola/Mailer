@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/elysola/mailer/internal/core"
-	"github.com/elysola/mailer/internal/selector"
 	"github.com/elysola/mailer/internal/render"
+	"github.com/elysola/mailer/internal/selector"
 )
 
 const (

@@ -22,9 +22,9 @@ type fakeLLM struct {
 	err   error
 }
 
-func (f *fakeLLM) Name() string             { return "fake" }
-func (f *fakeLLM) Type() string             { return "fake" }
-func (f *fakeLLM) Model() string            { return "fake-1" }
+func (f *fakeLLM) Name() string                { return "fake" }
+func (f *fakeLLM) Type() string                { return "fake" }
+func (f *fakeLLM) Model() string               { return "fake-1" }
 func (f *fakeLLM) Start(context.Context) error { return nil }
 func (f *fakeLLM) Stop(context.Context) error  { return nil }
 
