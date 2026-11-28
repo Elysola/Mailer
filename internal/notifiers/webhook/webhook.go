@@ -45,15 +45,15 @@ type Config struct {
 }
 
 type Notifier struct {
-	name      string
-	url       string
-	method    string
-	headers   map[string]string
-	tmpl      *template.Template
-	body      string
-	ctype     string
-	success   int
-	client    *http.Client
+	name    string
+	url     string
+	method  string
+	headers map[string]string
+	tmpl    *template.Template
+	body    string
+	ctype   string
+	success int
+	client  *http.Client
 }
 
 // New is the component factory for `type: webhook`.
@@ -143,8 +143,8 @@ func (n *Notifier) Send(ctx context.Context, env core.Envelope) error {
 		payload = buf.Bytes()
 	} else {
 		payload, err = json.Marshal(struct {
-			Title    string       `json:"title"`
-			Body     string       `json:"body"`
+			Title    string        `json:"title"`
+			Body     string        `json:"body"`
 			Envelope core.Envelope `json:"envelope"`
 		}{Title: env.Title, Body: env.Body, Envelope: env})
 		if err != nil {

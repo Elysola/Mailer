@@ -8,7 +8,7 @@
 //   - name: otp-extract
 //     type: regex
 //     extract:
-//       code: '(?:code|验证码)[:：\s]*(\d{4,8})'
+//     code: '(?:code|验证码)[:：\s]*(\d{4,8})'
 //     fields: [code]
 //
 // Actually the simplest useful form is even shorter — `extract` keys ARE the
