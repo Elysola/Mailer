@@ -63,6 +63,17 @@ sources:
   #     client_secret_file: gmail_client_secret.json
   #     token_file: gmail_token.json
 
+  # # maildir — local mail integration. Anything that drops RFC 5322 files
+  # # into a maildir (postfix/dovecot, fetchmail, getmail, procmail) becomes
+  # # a mailer source; acked mail moves from new/ to cur/ so other mail
+  # # clients see the same state:
+  # - name: local
+  #   type: maildir
+  #   dir: /var/mail/me
+  #   poll_interval: 30s
+  #   mark_read: true            # move handled mail to cur/ with the \Seen flag
+  #   notify_existing: false
+
 # ---- Notifiers: where notifications are delivered ---------------------------
 notifiers:
   - name: tg-main
@@ -82,6 +93,13 @@ notifiers:
   #   type: telegram
   #   bot_token: ${TG_PERSONAL_TOKEN}
   #   chat_ids: ["456"]
+
+  # # gotify — self-hosted push with a dead-simple API:
+  # - name: gotify-home
+  #   type: gotify
+  #   url: https://push.example.com
+  #   token_file: /run/secrets/gotify_token
+  #   priority: 5                     # 0..10
 
   # # ntfy — self-host friendly push (https://ntfy.sh or your own server):
   # - name: ntfy-alerts
@@ -142,6 +160,23 @@ processors:
   #   # replace:                     # body rewrite, $1 group refs allowed
   #   #   '\d{16}': "[card]"
   #   # drop_on_match: '(?i)unsubscribe'   # shred noise outright
+
+  # # throttle — repeat suppression for chatty senders. The first mail
+  # # passes; identical from+subject inside the window is dropped:
+  # - name: alert-throttle
+  #   type: throttle
+  #   window: 1h
+  #   keys: [from, subject]           # default; [subject] alone works too
+  #   when: 'account == "monitoring"'
+
+  # # header — copy headers into routable fields. Mailing lists route on
+  # # List-Id because subject prefixes and sender addresses lie:
+  # - name: list-headers
+  #   type: header
+  #   copy:
+  #     List-Id: list
+  #     X-Spam-Flag: spam
+  #   # prefix: hdr_                  # namespace like llmextract does
 
   # # set — stamp static fields so later routes/processors can match on
   # # them; doubles as the simplest drop filter when drop: true:
