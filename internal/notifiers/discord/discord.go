@@ -231,14 +231,14 @@ func (d *Notifier) handleInteraction(ctx context.Context, raw json.RawMessage) {
 		mctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		text := "✅ 已标记为已读"
-		cmd := core.Command{Kind: "mark_read", Args: map[string]string{"uid": fmt.Sprintf("%d", uid)}}
+		cmd := core.Command{Kind: "mark_read", Args: map[string]string{"uid": uid}}
 		if err := d.commander.Command(mctx, source, cmd); err != nil {
-			log.Printf("[%s] mark read %s:%d: %v", d.name, source, uid, err)
+			log.Printf("[%s] mark read %s:%s: %v", d.name, source, uid, err)
 			text = "❌ 标记失败，请稍后重试"
 			d.sendFollowup(it.ApplicationID, it.Token, text)
 			return
 		}
-		log.Printf("[%s] marked %s:%d as read", d.name, source, uid)
+		log.Printf("[%s] marked %s:%s as read", d.name, source, uid)
 		d.sendFollowup(it.ApplicationID, it.Token, text)
 	}()
 }
@@ -281,19 +281,22 @@ func readCallbackData(msg core.Message) string {
 	return fmt.Sprintf("read:%s:%s", msg.Source, uid)
 }
 
-// parseReadCallback decodes a callback id back into source+uid.
-func parseReadCallback(data string) (string, uint64, bool) {
+// parseReadCallback decodes a callback id back into source+uid. The uid is
+// an opaque string: IMAP uses decimal UIDs, maildir uses filenames. Anything
+// with a path separator is rejected — maildir filenames become filesystem
+// paths.
+func parseReadCallback(data string) (string, string, bool) {
 	rest, ok := strings.CutPrefix(data, "read:")
 	if !ok {
-		return "", 0, false
+		return "", "", false
 	}
 	idx := strings.LastIndex(rest, ":")
-	if idx <= 0 {
-		return "", 0, false
+	if idx <= 0 || idx+1 >= len(rest) {
+		return "", "", false
 	}
-	var uid uint64
-	if _, err := fmt.Sscanf(rest[idx+1:], "%d", &uid); err != nil {
-		return "", 0, false
+	uid := rest[idx+1:]
+	if strings.ContainsAny(uid, "/\x00") {
+		return "", "", false
 	}
 	return rest[:idx], uid, true
 }

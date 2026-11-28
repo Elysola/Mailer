@@ -281,14 +281,14 @@ func (t *Notifier) handleCallback(cb *tgCallbackQuery) {
 	defer cancel()
 	cmd := core.Command{
 		Kind: "mark_read",
-		Args: map[string]string{"uid": fmt.Sprintf("%d", uid)},
+		Args: map[string]string{"uid": uid},
 	}
 	if err := t.commander.Command(ctx, source, cmd); err != nil {
-		log.Printf("[%s] mark read %s:%d: %v", t.name, source, uid, err)
+		log.Printf("[%s] mark read %s:%s: %v", t.name, source, uid, err)
 		t.answerCallbackQuery(cb.ID, "❌ 标记失败，请稍后重试")
 		return
 	}
-	log.Printf("[%s] marked %s:%d as read", t.name, source, uid)
+	log.Printf("[%s] marked %s:%s as read", t.name, source, uid)
 	t.answerCallbackQuery(cb.ID, "✅ 已标记为已读")
 }
 
@@ -324,20 +324,23 @@ func readCallbackData(msg core.Message) string {
 	return fmt.Sprintf("read:%s:%s", msg.Source, uid)
 }
 
-// parseReadCallback decodes a callback id back into source+uid.
-func parseReadCallback(data string) (string, uint64, bool) {
+// parseReadCallback decodes a callback id back into source+uid. The uid is
+// an opaque string: IMAP uses decimal UIDs, maildir uses filenames, future
+// sources use whatever their protocol calls a message key. Anything with a
+// path separator is rejected — maildir filenames become filesystem paths.
+func parseReadCallback(data string) (string, string, bool) {
 	const prefix = "read:"
 	rest, ok := strings.CutPrefix(data, prefix)
 	if !ok {
-		return "", 0, false
+		return "", "", false
 	}
 	idx := strings.LastIndex(rest, ":")
-	if idx <= 0 {
-		return "", 0, false
+	if idx <= 0 || idx+1 >= len(rest) {
+		return "", "", false
 	}
-	var uid uint64
-	if _, err := fmt.Sscanf(rest[idx+1:], "%d", &uid); err != nil {
-		return "", 0, false
+	uid := rest[idx+1:]
+	if strings.ContainsAny(uid, "/\x00") {
+		return "", "", false
 	}
 	return rest[:idx], uid, true
 }
