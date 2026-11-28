@@ -19,7 +19,7 @@ ARG DATE=unknown
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-    -o /out/mailer .
+    -o /out/mailer ./cmd/mailer
 
 # ---- runtime stage ----
 FROM alpine:3.20

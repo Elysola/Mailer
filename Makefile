@@ -23,7 +23,7 @@ LDFLAGS := -s -w \
 all: build
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o mailer .
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o mailer ./cmd/mailer
 
 test:
 	go vet ./...

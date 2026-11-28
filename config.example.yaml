@@ -1,128 +1,196 @@
-# How often to check every account for new mail (Go duration: 30s, 1m, 5m...).
-poll_interval: 60s
-
-# SQLite database used to remember which mail has already been notified.
-# When running in Docker, point this at the mounted data volume, e.g.:
-#   state_file: /app/data/state.db
-state_file: state.db
-
-# HTTP health check and metrics server port. Set to 0 to disable.
-health_port: 9100
-
-# Notification retry: attempts (excluding first try) and base backoff delay.
-retry_attempts: 2
-retry_delay: 5s
-
-# Optional interactive "mark as read" button on notifications. Requires a bot:
-# - Telegram: bot token (uses getUpdates long polling)
-# - Discord: bot_token (Gateway handles button interactions; a plain webhook
-#   cannot receive button clicks, the button would be inert)
-read_button: false
-
-# IMAP NOOP keepalive interval. Pooled connections send NOOP at this rate
-# to prevent server-side timeouts.
-noop_interval: 30s
-
-# Optional directory containing WASM mail processors. Each plugin is a YAML
-# manifest next to a .wasm file. Plugins use the versioned mailer.plugin.v1
-# JSON in/out ABI and are tried by priority, highest first.
+# config.yaml (v2) — Mailer v2 architecture
 #
-# A manifest may also declare `patterns` (host-evaluated RE2 regexes) whose
-# captures become result fields, usable in mail_template as {{.Fields.name}}.
-# Plugin results can override the title/text and narrow delivery via
-# `notifiers`; all of it is persisted with the retry queue.
-# plugin_dir: ./plugins
-# plugin_timeout: 100ms
-# plugin_max_input: 524288
-# plugin_max_output: 16384
+# Migrating from v1? Run:  mailer migrate-config -config config.yaml
+# It writes config.v2.yaml next to the original, which you review and rename.
+#
+# Every instance below is a component: `type` selects the factory, all other
+# fields belong to the component itself. Adding a new component type upstream
+# never requires changes to this file's schema.
+version: 2
 
-# Max characters of preview text extracted from each mail body. Any notifier
-# further truncates to its own platform limit (e.g. Telegram 4096 chars).
-# Can be overridden per account. Default 400.
-preview_len: 400
+daemon:
+  # How often sources poll for new mail (Go duration: 30s, 1m, 5m...).
+  poll_interval: 60s
+  # HTTP health/metrics/status server port. Set to 0 to disable.
+  health_port: 9100
+  # Notification retry: attempts (excluding first try) and base backoff delay.
+  retry_attempts: 2
+  retry_delay: 5s
+  # How long delivered Message-IDs are remembered for dedup.
+  # Default 2160h (90d).
+  seen_retention: 2160h
+  # Upper bound on queued retries re-attempted per source per scan. Default 200.
+  max_pending_per_source: 200
 
-# How long delivered Message-IDs are remembered for dedup, before the
-# seen_messages table is pruned (checked about once a day). Default 90d.
-seen_retention: 2160h
+state:
+  # SQLite state file. In Docker point this at the mounted volume.
+  driver: sqlite
+  file: state.db
 
-# Upper bound on how many failed notifications are retried per account each
-# poll cycle. Failed notices retry with exponential backoff (capped at 1h)
-# and are dropped after 7 days. Default 200.
-max_pending_per_account: 200
-
-# One or more IMAP mailboxes to watch. Add as many accounts as you like.
-accounts:
-  - name: primary                # label shown in notifications/logs
+# ---- Sources: mailboxes to watch -------------------------------------------
+sources:
+  - name: primary              # label shown in notifications, logs, routes
+    type: imap
     host: imap.example.com
-    port: 993                     # 993 = implicit TLS, 143 = STARTTLS
+    port: 993                  # 993 = implicit TLS, 143 = STARTTLS
+    tls: true                  # true = implicit TLS; false = STARTTLS
     username: me@example.com
-    password: "app-password-here"
-    tls: true                     # true = implicit TLS (993); false = STARTTLS (143)
+    password: "app-password"   # or password_file: /run/secrets/imap_pass
     mailbox: INBOX
-    mark_seen: false              # true = mark mail \Seen after notifying
-    notify_existing: false        # false = only notify mail arriving after startup
-    # idle: true                  # real-time: hold an IMAP IDLE session open
-    #                             # and poll the instant mail arrives. Regular
-    #                             # polling continues as a safety net.
-    #                             # Requires server-side IDLE support.
-    # preview_len: 120             # optional: override global preview length
-    # notifiers: [telegram]        # optional: override global notifiers per account
-    # message_template:            # optional: per-account message template
-    #   title: "{{.Subject}}"
-    #   text: "From: {{.From}}\n{{.Preview}}"
-    # password_file: /run/secrets/imap_pass    # read password from file (age/gpg/any)
-    #                                          # also supports $ENV_VAR expansion
+    mark_seen: false           # true = mark mail \Seen after delivery
+    notify_existing: false     # false = only notify mail arriving after startup
+    idle: true                 # real-time push via IMAP IDLE (falls back to
+                               # plain polling when the server lacks support)
+    preview_len: 400           # max characters of body preview
 
-  - name: work                    # a second account (Office 365 example)
-    host: outlook.office365.com
-    port: 993
-    username: me@work.com
-    password: "app-password"
-    tls: true
+  # A second account (Office 365 example):
+  # - name: work
+  #   type: imap
+  #   host: outlook.office365.com
+  #   port: 993
+  #   tls: true
+  #   username: me@work.com
+  #   password: "app-password"
 
-  - name: gmail                   # a third account (Gmail example)
-    host: imap.gmail.com
-    port: 993
-    username: me@gmail.com
-    # Gmail disabled password/basic auth, so either an App Password (with
-    # 2FA enabled) or OAuth2 works. App Password keeps `password`; OAuth2
-    # replaces it with the block below. See "Gmail over OAuth2" in README.
-    password: "app-password"     # App Password: 16 chars, 2FA required
-    # oauth2:                     # ...or comment out `password` and use this
-    #   client_id: "1234-abc.apps.googleusercontent.com"
-    #   client_secret_file: /run/secrets/gmail_client_secret
-    #   # written by `mailer auth gmail`; must be mode 0600
-    #   token_file: /var/lib/mailer/gmail_token.json
-    tls: true
-    mailbox: INBOX
+  # Gmail with OAuth2 (see mailer auth gmail):
+  # - name: gmail
+  #   type: imap
+  #   host: imap.gmail.com
+  #   tls: true
+  #   username: you@gmail.com
+  #   oauth2:
+  #     client_id: ${GMAIL_CLIENT_ID}
+  #     client_secret_file: gmail_client_secret.json
+  #     token_file: gmail_token.json
 
-# Telegram push via a bot. Create a bot with @BotFather to get the token,
-# then get your chat_id (e.g. message the bot and read getUpdates).
-telegram:
-  enabled: true
-  bot_token: "123456789:ABCdefGhIJKlmNoPQRsTUVwxyz"  # or bot_token_file
-  # bot_token_file: /run/secrets/telegram_token
-  chat_ids:
-    - "123456789"
-  # api_base: "https://api.telegram.org"   # https only: the bot token rides in
-  #                                       # the URL path, so http is rejected
+# ---- Notifiers: where notifications are delivered ---------------------------
+notifiers:
+  - name: tg-main
+    type: telegram
+    bot_token_file: /run/secrets/tg_token   # or bot_token: "123:abc"
+    chat_ids: ["123456789"]
+    interactive: true        # "mark as read" buttons (needs a bot token)
 
-# Discord push. Use EITHER a webhook_url (simplest) OR bot_token + channel_id.
-discord:
-  enabled: false
-  webhook_url: "https://discord.com/api/webhooks/XXXX/YYYY"
-  # webhook_url_file: /run/secrets/discord_webhook
-  bot_token: ""
-  # bot_token_file: /run/secrets/discord_token
-  channel_id: ""
+  - name: dc-alerts
+    type: discord
+    webhook_url_file: /run/secrets/dc_webhook   # or webhook_url: "https://..."
+    # bot_token + channel_id enable interactive buttons and edits; a plain
+    # webhook is send-only.
 
-# Optional global message template overrides. Each field is a Go text/template
-# string executed against the Message struct. Per-account templates take
-# precedence when set.
-# message_template:
-#   title: "{{.Subject}}"
-#   text: |
-#     📬 New mail on {{.Account}}
-#     From: {{.From}}
-#     Subject: {{.Subject}}
-#     {{if .Preview}}{{.Preview}}{{end}}
+  # Multiple instances of the same type just work:
+  # - name: tg-personal
+  #   type: telegram
+  #   bot_token: ${TG_PERSONAL_TOKEN}
+  #   chat_ids: ["456"]
+
+# ---- Processors: pipeline middle stages -------------------------------------
+processors:
+  # WASM plugins live under a directory; one `wasm` processor instance loads
+  # the whole directory (see mailer plugins list/validate/test).
+  - name: wasm-plugins
+    type: wasm
+    dir: ./plugins
+    limits:                  # fallback limits; per-plugin manifests win
+      timeout: 100ms
+      max_input: 524288
+      max_output: 16384
+
+  # Built-in noise filter — runs before WASM/LLM so junk never bills tokens.
+  - name: noise-filter
+    type: filter
+    rules:
+      - when: 'headers["X-Spam-Flag"] == "YES"'
+        action: drop
+      - when: 'subject ~= "^\\[spam\\]"'
+        action: drop
+
+  # # AI stages reference llms: instances by name. `when` gates them at zero
+  # # cost — the LLM is never called for messages that do not match.
+  # - name: classify
+  #   type: llmclassify
+  #   llm: fast
+  #   classes: [bill, notice, personal, newsletter, other]
+  #   cache: true
+  #
+  # - name: summarize
+  #   type: llmsummarize
+  #   llm: smart
+  #   when: 'fields.class == "bill"'
+  #   prompt: |
+  #     用中文三句话以内总结这封邮件，保留金额、日期、行动要求。
+  #   max_input_runes: 4000
+  #   output: body            # body | fields
+  #   on_error: passthrough   # passthrough | drop | fail
+  #
+  # - name: extract-invoice
+  #   type: llmextract
+  #   llm: smart
+  #   when: 'fields.class == "bill"'
+  #   prefix: invoice_
+  #   schema:
+  #     type: object
+  #     properties:
+  #       amount:   { type: number }
+  #       currency: { type: string }
+  #       due_date: { type: string }
+  #       vendor:   { type: string }
+
+  # # Run an external command per message:
+  # - name: webhook-out
+  #   type: exec
+  #   command: ["/usr/local/bin/notify-hook"]
+  #   timeout: 5s
+
+# ---- LLM services (only needed for llm* processors) -------------------------
+# llms:
+#   - name: fast
+#     type: openai              # OpenAI-compatible: DeepSeek/Qwen/Zhipu/Ollama
+#     base_url: https://api.deepseek.com
+#     api_key: ${DEEPSEEK_KEY}
+#     model: deepseek-chat
+#     timeout: 15s
+#     max_concurrency: 4
+#
+#   - name: local
+#     type: openai              # local Ollama is also OpenAI-compatible
+#     base_url: http://127.0.0.1:11434/v1
+#     model: qwen3:8b
+
+# ---- Routes: the single source of truth for delivery policy ------------------
+# Rows are evaluated in order; every matching row contributes its notifiers
+# and processors (union, deduped) until a row with `stop: true` terminates
+# evaluation. A row without `when` always matches.
+routes:
+  # Example fast path: mails the wasm plugin tagged with an otp field go
+  # straight to the personal telegram, and nothing else.
+  # - name: otp-fast-path
+  #   when: 'fields.otp_code != ""'
+  #   to: [tg-personal]
+  #   stop: true
+
+  # Per-source routing replaces v1's per-account notifier overrides:
+  # - name: work-mail
+  #   when: 'source == "work"'
+  #   processors: [noise-filter, wasm-plugins]
+  #   to: [dc-alerts]
+
+  # Exactly one route must match everything; the loader rejects configs
+  # without one.
+  - name: catch-all
+    processors: [noise-filter, wasm-plugins]
+    to: [tg-main]
+    # per-route inline template:
+    # template:
+    #   title: "{{.Source}}: {{.Subject}}"
+    #   body: "{{.Preview}}"
+
+# ---- Templates: named title/body pairs referenced by routes ------------------
+templates:
+  default:
+    title: "[{{.Source}}] {{.Subject}}"
+    body: |
+      {{.Preview}}
+      — {{.From}}
+  # work:
+  #   title: "[工作] {{.Subject}}"
+  #   body: "{{.Preview}}"

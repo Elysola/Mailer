@@ -9,7 +9,7 @@ project_name: mailer
 
 builds:
   - id: mailer
-    main: .
+    main: ./cmd/mailer
     binary: mailer
     env:
       - CGO_ENABLED=0
