@@ -21,10 +21,16 @@ import (
 	// touches this file — these imports merely link the built-ins.
 	_ "github.com/elysola/mailer/internal/llm/openai"
 	_ "github.com/elysola/mailer/internal/notifiers/discord"
+	_ "github.com/elysola/mailer/internal/notifiers/ntfy"
+	_ "github.com/elysola/mailer/internal/notifiers/slack"
 	_ "github.com/elysola/mailer/internal/notifiers/telegram"
+	_ "github.com/elysola/mailer/internal/notifiers/webhook"
 	_ "github.com/elysola/mailer/internal/processors/exec"
 	_ "github.com/elysola/mailer/internal/processors/filter"
 	_ "github.com/elysola/mailer/internal/processors/llm"
+	_ "github.com/elysola/mailer/internal/processors/regex"
+	_ "github.com/elysola/mailer/internal/processors/set"
+	_ "github.com/elysola/mailer/internal/processors/templateproc"
 	_ "github.com/elysola/mailer/internal/processors/wasm"
 	_ "github.com/elysola/mailer/internal/sources/imap"
 )

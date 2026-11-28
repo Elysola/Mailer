@@ -83,6 +83,34 @@ notifiers:
   #   bot_token: ${TG_PERSONAL_TOKEN}
   #   chat_ids: ["456"]
 
+  # # ntfy — self-host friendly push (https://ntfy.sh or your own server):
+  # - name: ntfy-alerts
+  #   type: ntfy
+  #   server: https://ntfy.sh         # or your self-hosted instance
+  #   topic_file: /run/secrets/ntfy_topic   # the topic is the credential
+  #   priority: 4                     # 1 min .. 5 max
+  #   tags: [email, warning]
+  #   # token_file: /run/secrets/ntfy_token   # bearer auth, or user/password
+
+  # # Slack incoming webhook — the simplest Slack integration:
+  # - name: slack-ops
+  #   type: slack
+  #   webhook_url_file: /run/secrets/slack_webhook
+  #   channel: "#alerts"              # optional override
+  #   username: mailer
+  #   icon_emoji: ":mailbox:"
+
+  # # Generic webhook — covers everything else (home automation, ticket
+  # # systems, custom bots). The body template uses the `json` helper to
+  # # keep interpolated strings safely escaped:
+  # - name: homeassistant
+  #   type: webhook
+  #   url: https://ha.example.com/api/webhook/mail-arrived
+  #   headers:
+  #     Authorization: Bearer ${HA_TOKEN}
+  #   body: '{"text": {{.Message.Subject | json}}}'
+  #   # success_status: 200           # when the endpoint answers non-2xx
+
 # ---- Processors: pipeline middle stages -------------------------------------
 processors:
   # WASM plugins live under a directory; one `wasm` processor instance loads
@@ -103,6 +131,32 @@ processors:
         action: drop
       - when: 'subject ~= "^\\[spam\\]"'
         action: drop
+
+  # # regex — zero-dependency field extraction, replacement, shredding.
+  # # First capture group wins (whole match when the pattern has none):
+  # - name: otp-extract
+  #   type: regex
+  #   when: 'subject contains "验证" or subject contains "code"'
+  #   extract:
+  #     code: '(?:code|验证码)[:：\s]*(\d{4,8})'
+  #   # replace:                     # body rewrite, $1 group refs allowed
+  #   #   '\d{16}': "[card]"
+  #   # drop_on_match: '(?i)unsubscribe'   # shred noise outright
+
+  # # set — stamp static fields so later routes/processors can match on
+  # # them; doubles as the simplest drop filter when drop: true:
+  # - name: tag-work
+  #   type: set
+  #   when: 'account == "work"'
+  #   fields: { mailbox_type: work, priority: high }
+
+  # # template — re-render title/body mid-pipeline once extraction has
+  # # filled fields (plain-text templates; use before routing):
+  # - name: otp-format
+  #   type: template
+  #   when: 'has(fields.code)'
+  #   title: "验证码 {{.Fields.code}}"
+  #   body: "来自 {{.Message.From}} 的验证码：{{.Fields.code}}"
 
   # # AI stages reference llms: instances by name. `when` gates them at zero
   # # cost — the LLM is never called for messages that do not match.
